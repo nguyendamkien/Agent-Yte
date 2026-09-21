@@ -1,0 +1,236 @@
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100vh;
+  width: 100vw;
+  background: #ffffff;
+}
+
+/* ---------- Header ---------- */
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.9rem 1.5rem;
+  background: linear-gradient(135deg, #0f9d8c, #0a7a6d);
+  color: #fff;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 1.3rem;
+  white-space: nowrap;
+}
+
+.app-header p {
+  margin: 0;
+  font-size: 0.85rem;
+  opacity: 0.9;
+}
+
+/* ---------- Body (sidebar + main) ---------- */
+.app-body {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  min-height: 0;
+}
+
+/* ---------- Sidebar ---------- */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: #f4f7f6;
+  border-right: 1px solid #dfe7e5;
+  min-height: 0;
+}
+
+.sidebar__new-btn {
+  padding: 0.6rem 0.9rem;
+  border: 1px solid #0f9d8c;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f9d8c;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.sidebar__new-btn:hover {
+  background: #e6f5f2;
+}
+
+.sidebar__list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.sidebar__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  color: #33433f;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+}
+
+.sidebar__item:hover {
+  background: #e9f2f0;
+}
+
+.sidebar__item--active {
+  background: #dcf1ec;
+  border-left-color: #0f9d8c;
+  color: #0a7a6d;
+  font-weight: 600;
+}
+
+.sidebar__item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__item-delete {
+  border: none;
+  background: transparent;
+  color: #93a3a0;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.2rem;
+}
+
+.sidebar__item-delete:hover {
+  color: #c0392b;
+}
+
+/* ---------- Main chat area ---------- */
+.app-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.chat-window {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  background: #f9fbfa;
+}
+
+.message-row {
+  display: flex;
+  width: 100%;
+}
+
+.message-row--user {
+  justify-content: flex-end;
+}
+
+.message-row--bot {
+  justify-content: flex-start;
+}
+
+.message-bubble {
+  max-width: 70%;
+  padding: 0.6rem 0.9rem;
+  border-radius: 14px;
+  line-height: 1.45;
+  font-size: 0.95rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.message-bubble--user {
+  background: #0f9d8c;
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.message-bubble--bot {
+  background: #ffffff;
+  color: #1f2d2b;
+  border: 1px solid #e0e6e4;
+  border-bottom-left-radius: 4px;
+}
+
+.message-bubble--error {
+  background: #fdecea;
+  border-color: #f5c2bd;
+  color: #a12622;
+}
+
+.message-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.75rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid #e0e6e4;
+  font-size: 0.78rem;
+}
+
+.message-sources a {
+  color: #087f70;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Chat input ---------- */
+.chat-input {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.85rem 1.5rem;
+  border-top: 1px solid #e5e5e5;
+  background: #fff;
+}
+
+.chat-input input {
+  flex: 1;
+  padding: 0.65rem 1rem;
+  border: 1px solid #d0d7d5;
+  border-radius: 20px;
+  font-size: 0.95rem;
+  outline: none;
+}
+
+.chat-input input:focus {
+  border-color: #0f9d8c;
+}
+
+.chat-input button {
+  padding: 0.65rem 1.4rem;
+  border: none;
+  border-radius: 20px;
+  background: #0f9d8c;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chat-input button:disabled {
+  background: #a9c9c4;
+  cursor: not-allowed;
+}
+
+/* ---------- Footer ---------- */
+.app-footer {
+  padding: 0.55rem 1.5rem;
+  font-size: 0.75rem;
+  color: #6b7876;
+  text-align: center;
+  background: #f4f7f6;
+  border-top: 1px solid #e5e5e5;
+}

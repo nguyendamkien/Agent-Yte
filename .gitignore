@@ -1,0 +1,50 @@
+# ---------- Secrets / env ----------
+.env
+.env.*
+!.env.example
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------- Node / Frontend ----------
+node_modules/
+dist/
+dist-ssr/
+*.local
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+.vite/
+
+# ---------- Dữ liệu sinh ra (build lại được) ----------
+# Vector DB (Chroma) – tạo lại bằng backend/app/scripts/build_index.py
+backend/app/storage/
+backend/storage/
+
+# Dữ liệu crawl (~74MB) – tạo lại bằng data-collection/run_crawl.py
+data-collection/data/*
+!data-collection/data/.gitkeep
+
+# ---------- Logs ----------
+logs/
+*.log
+
+# ---------- Editor / OS ----------
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.sw?
+.DS_Store
+Thumbs.db
+desktop.ini
