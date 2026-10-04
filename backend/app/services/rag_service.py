@@ -10,6 +10,13 @@ class RagService:
         self._retriever = retriever
 
     def ask(self, message: str, history: list[ChatMessage]) -> tuple[str, list[Source]]:
+        reply, sources, _ = self.ask_with_context(message, history)
+        return reply, sources
+
+    def ask_with_context(
+        self, message: str, history: list[ChatMessage]
+    ) -> tuple[str, list[Source], list[dict]]:
+        """Như ask(), trả thêm các chunk đã retrieve (dùng cho đánh giá RAG)."""
         results = self._retriever.search(message)
         prompt = build_rag_prompt(message, build_context(results))
         reply = self._gemini.ask(prompt, history)
@@ -22,7 +29,7 @@ class RagService:
             for result in results
             if result["metadata"].get("url")
         ]
-        return reply, sources
+        return reply, sources, results
 
 
 _service: RagService | None = None

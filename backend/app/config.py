@@ -8,12 +8,23 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-1.5-flash"
-    embedding_model: str = "models/embedding-001"
+    openai_api_key: str = ""
+    embedding_model: str = "text-embedding-3-small"
     vector_db_path: str = "app/storage/chroma"
     vector_collection: str = "medical_documents"
     rag_top_k: int = 5
     rag_min_score: float = 0.25
-    data_path: str = "../data-collection/data/combined.jsonl"
+    # Retrieval: "hybrid" (BM25 + dense, gộp bằng RRF) hoặc "dense" (chỉ vector)
+    retrieval_mode: str = "hybrid"
+    rag_candidates: int = 20  # số ứng viên mỗi nhánh lấy về trước khi gộp / rerank
+    rrf_k: int = 60
+    # Rerank bằng cross-encoder bge-reranker-v2-m3 (xem app/rag/reranker.py)
+    rerank_enabled: bool = False
+    rerank_onnx_repo: str = "onnx-community/bge-reranker-v2-m3-ONNX"
+    rerank_onnx_file: str = "onnx/model_int8.onnx"  # "onnx/model.onnx" = bản fp32 (~2.3 GB)
+    rerank_candidates: int = 20  # số ứng viên RRF đưa vào cross-encoder (ít hơn → nhanh hơn)
+    rerank_min_score: float = 0.4  # điểm rerank tốt nhất < ngưỡng → coi như không có tài liệu phù hợp
+    data_path: str = "../data-collection/data/benh_pho_bien_10.jsonl"
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")

@@ -1,83 +1,232 @@
 # ChatBot Y Tế
 
-Chatbot hỏi đáp thông tin y tế đơn giản, gồm:
+Chatbot hỏi đáp thông tin y tế tiếng Việt, dùng **RAG** (Retrieval-Augmented Generation): tìm các đoạn liên quan trong bài viết y khoa thu thập từ Vinmec, Medlatec và Báo Sức khỏe & Đời sống, rồi để Google Gemini sinh câu trả lời dựa trên các đoạn đó, kèm nguồn tham khảo.
 
-- **backend/**: FastAPI, gọi Google Gemini API để trả lời câu hỏi.
-- **frontend/**: ReactJS (Vite), giao diện chat.
-- **data-collection/**: script thu thập dữ liệu y tế tiếng Việt (Vinmec,
-  Medlatec) làm knowledge base cho bước RAG sau này — xem
-  [data-collection/README.md](data-collection/README.md).
+> ⚠️ Đây là công cụ tham khảo thông tin, **không thay thế** chẩn đoán hay tư vấn của bác sĩ và chuyên gia y tế.
 
-> ⚠️ Đây là công cụ tham khảo thông tin, **không thay thế** chẩn đoán/tư vấn
-> của bác sĩ hay chuyên gia y tế.
+## Kiến trúc
 
-## 1. Chạy Backend (FastAPI)
+```
+                        (1) Chạy 1 lần / khi cần cập nhật dữ liệu
+ data-collection/  ──►  data/benh_pho_bien_10.jsonl  ──►  ingest.py  ──►  Chroma (vector DB)
+   crawl 3 nguồn          100 bài, 10 nhóm bệnh          chunk + embedding OpenAI   app/storage/chroma
+
+                        (2) Mỗi câu hỏi của người dùng
+ Frontend (React)  ──►  POST /api/chat  ──►  hybrid retrieval: BM25 + dense (Chroma), gộp RRF
+                                                                       │ top-5 chunk
+ Frontend hiển thị  ◄──  { reply, sources, disclaimer }  ◄──  Gemini sinh câu trả lời
+ câu trả lời + nguồn                                            từ context + lịch sử chat
+```
+
+| Thư mục                           | Vai trò                                       | Công nghệ                                                                             |
+| ----------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------- |
+| [backend/](backend/)                 | API chat + pipeline RAG                        | FastAPI, OpenAI embedding, Gemini API, ChromaDB, BM25, ONNX Runtime (rerank tuỳ chọn) |
+| [frontend/](frontend/)               | Giao diện chat, lưu nhiều cuộc hội thoại | React 19, Vite                                                                          |
+| [data-collection/](data-collection/) | Crawler thu thập dữ liệu y tế              | requests, BeautifulSoup                                                                 |
+| [docs/](docs/)                       | Tài liệu pipeline RAG và cách đánh giá  | —                                                                                      |
+
+## Tài liệu
+
+- [docs/RAG.md](docs/RAG.md) — pipeline RAG chi tiết: dữ liệu, ingest, chunking, model, hybrid retrieval (BM25 + dense, RRF), rerank cross-encoder, cấu hình, hạn chế đã biết.
+- [docs/RAG_EVAL.md](docs/RAG_EVAL.md) — bộ golden test 70 câu, script đo retrieval và chấm end-to-end theo tiêu chí RAG, kết quả đo.
+- [backend/STRUCTURE.md](backend/STRUCTURE.md) — cấu trúc code backend và luồng xử lý một request.
+- [data-collection/README.md](data-collection/README.md) — crawler, nguồn dữ liệu, bản quyền.
+
+## Yêu cầu
+
+- **Python 3.11+**
+- **Node.js 20.19+ hoặc 22.12+** và npm (yêu cầu của Vite)
+- **Gemini API key** — sinh câu trả lời (https://aistudio.google.com/apikey)
+- **OpenAI API key** — tạo embedding (https://platform.openai.com/api-keys). Chi phí rất nhỏ: embed toàn bộ dữ liệu 10 bệnh ~$0.006, mỗi câu hỏi không đáng kể.
+
+## Cài đặt & chạy
+
+Repo **không chứa** dữ liệu crawl và vector index (đã bỏ qua trong `.gitignore`), nên lần đầu cần làm đủ 4 bước dưới đây theo thứ tự.
+
+### Bước 1 — Thu thập dữ liệu
+
+```bash
+cd data-collection
+python -m venv venv
+venv\Scripts\activate          # macOS/Linux: source venv/bin/activate
+pip install -r requirements.txt
+
+python run_crawl.py --source all --limit 20     # chạy thử nhanh, mỗi nguồn 20 bài
+```
+
+Để lấy bộ dữ liệu đầy đủ và các tuỳ chọn khác, xem [data-collection/README.md](data-collection/README.md). Backend mặc định đọc `data-collection/data/benh_pho_bien_10.jsonl` (100 bài của 10 nhóm bệnh phổ biến); đổi `DATA_PATH` để dùng file khác, vd `combined.jsonl` (2.306 bài).
+
+### Bước 2 — Cấu hình & cài backend
 
 ```bash
 cd backend
 python -m venv venv
-# Windows:
-venv\Scripts\activate
-# macOS/Linux:
-source venv/bin/activate
+venv\Scripts\activate          # macOS/Linux: source venv/bin/activate
+python -m pip install -r requirements.txt
 
-pip install -r requirements.txt
-
-# Tạo file cấu hình từ mẫu, rồi điền GEMINI_API_KEY của bạn
-copy .env.example .env      # Windows
-# cp .env.example .env      # macOS/Linux
-
-uvicorn main:app --reload --port 8000
+copy .env.example .env         # macOS/Linux: cp .env.example .env
+# Mở .env và điền GEMINI_API_KEY, OPENAI_API_KEY
 ```
 
-Backend chạy tại: http://localhost:8000
-Xem tài liệu API tự động (Swagger UI): http://localhost:8000/docs
-
-Lấy Gemini API key miễn phí tại: https://aistudio.google.com/apikey
-
-## 2. Chạy Frontend (ReactJS)
+### Bước 3 — Tạo vector index (chạy 1 lần)
 
 ```bash
+cd backend
+python -m app.scripts.ingest
+```
+
+Script chia bài viết thành chunk theo từng mục (Triệu chứng, Điều trị…), tạo embedding bằng OpenAI `text-embedding-3-small` (32 chunk mỗi request) và lưu vào Chroma. Với dữ liệu 10 bệnh: 505 chunk, khoảng 1 phút. Chạy lại script sẽ xoá index cũ và tạo mới — sau đó **khởi động lại backend** để chỉ mục BM25 được dựng lại theo index mới.
+
+### Bước 4 — Chạy backend và frontend
+
+```bash
+# Terminal 1 — backend
+cd backend
+python -m uvicorn main:app --reload --port 8000
+
+# Terminal 2 — frontend
 cd frontend
 npm install
-
-# (tuỳ chọn) copy .env.example .env nếu backend không chạy ở localhost:8000
-copy .env.example .env
-
+copy .env.example .env         # tuỳ chọn, chỉ cần khi backend không ở localhost:8000
 npm run dev
 ```
 
-Frontend chạy tại: http://localhost:5173
+- Frontend: http://localhost:5173
+- Backend: http://localhost:8000 — Swagger UI tại http://localhost:8000/docs
 
-## 3. Cấu trúc thư mục
+### Đánh giá chất lượng (tuỳ chọn)
+
+```bash
+cd backend
+python -m eval.eval_retrieval      # đo retrieval trên golden set, < $0.001
+python -m eval.eval_rag            # chấm toàn bộ pipeline bằng LLM giám khảo, ~10 phút
+```
+
+Chi tiết và kết quả: [docs/RAG_EVAL.md](docs/RAG_EVAL.md).
+
+## Cấu hình
+
+### Backend — `backend/.env`
+
+| Biến                 | Mặc định                                        | Ý nghĩa                                                                           |
+| --------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `GEMINI_API_KEY`    | *(bắt buộc)*                                   | API key của Gemini                                                                 |
+| `GEMINI_MODEL`      | `gemini-1.5-flash`                               | Model sinh câu trả lời                                                           |
+| `OPENAI_API_KEY`    | *(bắt buộc)*                                   | API key của OpenAI, dùng cho embedding                                            |
+| `EMBEDDING_MODEL`   | `text-embedding-3-small`                         | Model embedding (đổi thì phải chạy lại ingest)                                |
+| `DATA_PATH`         | `../data-collection/data/benh_pho_bien_10.jsonl` | File dữ liệu dùng để build index                                               |
+| `VECTOR_DB_PATH`    | `app/storage/chroma`                             | Nơi lưu Chroma                                                                    |
+| `VECTOR_COLLECTION` | `medical_documents`                              | Tên collection trong Chroma                                                        |
+| `RAG_TOP_K`         | `5`                                              | Số chunk đưa vào prompt cho mỗi câu hỏi                                      |
+| `RETRIEVAL_MODE`    | `hybrid`                                         | `hybrid` (BM25 + dense, gộp RRF) hoặc `dense`                                 |
+| `RERANK_ENABLED`    | `false`                                          | Bật rerank cross-encoder — chính xác hơn nhưng chậm ~10–25 s/câu trên CPU |
+| `CORS_ORIGINS`      | `http://localhost:5173,http://127.0.0.1:5173`    | Các origin frontend được phép gọi API                                         |
+
+Các biến còn lại (`RAG_MIN_SCORE`, `RAG_CANDIDATES`, `RRF_K`, `RERANK_*`): xem mục "Cấu hình liên quan" trong [docs/RAG.md](docs/RAG.md).
+
+### Frontend — `frontend/.env`
+
+| Biến                 | Mặc định               | Ý nghĩa          |
+| --------------------- | ------------------------- | ------------------ |
+| `VITE_API_BASE_URL` | `http://localhost:8000` | Địa chỉ backend |
+
+## API
+
+### `POST /api/chat`
+
+Request:
+
+```json
+{
+  "message": "Triệu chứng của cơn gout cấp là gì?",
+  "history": [
+    { "role": "user", "content": "..." },
+    { "role": "model", "content": "..." }
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "reply": "…",
+  "sources": [
+    { "title": "…", "url": "https://…", "citation": "Theo Báo Sức khỏe & Đời sống - …" }
+  ],
+  "disclaimer": "Thông tin trên chỉ mang tính tham khảo, không thay thế …"
+}
+```
+
+- `history` do frontend gửi kèm mỗi lần, server **không lưu** hội thoại. Frontend lưu các cuộc trò chuyện trong `localStorage` của trình duyệt.
+- `role` chỉ nhận `user` hoặc `model`.
+- Lỗi: `500` khi cấu hình sai (vd. thiếu API key), `502` khi gọi Gemini thất bại (mạng, quota, key sai, model không tồn tại).
+- `GET /` trả về `{"status": "ok"}` để kiểm tra server còn sống.
+
+## Cấu trúc thư mục
 
 ```
-ChatBot_Yte/
+.
 ├── backend/
-│   ├── app/
-│   │   ├── config.py          # Đọc cấu hình từ .env
-│   │   ├── schemas.py         # Pydantic models cho request/response
-│   │   ├── routers/chat.py    # Endpoint POST /api/chat
-│   │   └── services/gemini_service.py  # Gọi Gemini API
-│   ├── main.py                # Khởi tạo FastAPI app + CORS
+│   ├── main.py                   # Khởi tạo FastAPI + CORS
 │   ├── requirements.txt
-│   └── .env.example
-└── frontend/
-    ├── src/
-    │   ├── api/chatApi.js         # Gọi API backend
-    │   ├── components/
-    │   │   ├── MessageBubble.jsx
-    │   │   └── ChatInput.jsx
-    │   ├── App.jsx                # Giao diện chat chính
-    │   └── App.css
-    └── .env.example
+│   ├── .env.example
+│   ├── STRUCTURE.md              # Giải thích cấu trúc backend
+│   ├── app/
+│   │   ├── config.py             # Settings đọc từ .env
+│   │   ├── schemas.py            # Pydantic models (request/response)
+│   │   ├── routers/chat.py       # POST /api/chat
+│   │   ├── services/
+│   │   │   ├── rag_service.py    # Điều phối: retrieve → gọi Gemini → gom nguồn
+│   │   │   └── gemini_service.py # Gọi Gemini, chứa system prompt an toàn y tế
+│   │   ├── rag/
+│   │   │   ├── loader.py         # Đọc JSONL
+│   │   │   ├── chunker.py        # Chia chunk theo section
+│   │   │   ├── embeddings.py     # OpenAI embedding
+│   │   │   ├── vector_store.py   # Bọc ChromaDB
+│   │   │   ├── bm25.py           # Chỉ mục BM25 trong RAM (tìm theo từ khoá)
+│   │   │   ├── retriever.py      # Hybrid BM25 + dense, gộp RRF, ngưỡng, gọi rerank
+│   │   │   ├── reranker.py       # Cross-encoder bge-reranker-v2-m3 (ONNX, tuỳ chọn)
+│   │   │   └── prompt.py         # Ghép context + câu hỏi thành prompt
+│   │   └── scripts/ingest.py     # Tạo vector index
+│   └── eval/
+│       ├── golden_set.jsonl      # 70 câu hỏi chuẩn
+│       ├── eval_retrieval.py     # Đo retrieval
+│       └── eval_rag.py           # Chấm end-to-end bằng LLM giám khảo
+├── docs/                         # RAG.md, RAG_EVAL.md
+├── frontend/
+│   └── src/
+│       ├── App.jsx               # Giao diện chat chính
+│       ├── api/chatApi.js        # Gọi backend
+│       ├── components/           # Sidebar, MessageBubble, ChatInput
+│       └── utils/sessions.js     # Lưu các cuộc trò chuyện vào localStorage
+└── data-collection/
+    ├── run_crawl.py              # CLI chạy crawler
+    ├── crawlers/                 # vinmec.py, medlatec.py, suckhoedoisong.py
+    ├── config.py, utils.py
+    └── data/                     # Kết quả crawl (không nằm trong git)
 ```
 
-## 4. Ghi chú
+## Cách chatbot trả lời an toàn
 
-- Backend giữ system prompt yêu cầu Gemini không chẩn đoán bệnh cụ thể, không
-  kê đơn thuốc, và khuyến cáo đi khám bác sĩ / gọi cấp cứu 115 khi cần.
-- Lịch sử hội thoại được frontend gửi kèm mỗi request để chatbot nhớ ngữ cảnh
-  (không lưu trữ phía server).
-- Muốn đổi model Gemini (vd. `gemini-1.5-pro`), sửa biến `GEMINI_MODEL` trong
-  file `backend/.env`.
+- Prompt RAG yêu cầu Gemini **chỉ trả lời dựa trên context** tìm được; nếu không đủ thông tin thì nói rõ là chưa tìm thấy, không bịa. Đo trên golden set: 5/5 câu ngoài phạm vi dữ liệu đều được trả lời "chưa tìm thấy thông tin".
+- Không chẩn đoán cá nhân, không kê đơn hay liều thuốc; khuyên gọi **115** hoặc đến cơ sở y tế khi có dấu hiệu cấp cứu.
+- Mỗi câu trả lời kèm danh sách nguồn (link bài gốc) và câu disclaimer cố định.
+
+## Xử lý sự cố
+
+| Triệu chứng                                                                          | Nguyên nhân thường gặp                                                                                                                       |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Thiếu GEMINI_API_KEY` / `Thiếu OPENAI_API_KEY`                                  | Chưa tạo`backend/.env` hoặc chưa điền key                                                                                                 |
+| `Extra inputs are not permitted` khi khởi động                                    | `.env` có biến mà `Settings` trong `app/config.py` không khai báo — kiểm tra lại tên biến                                         |
+| `Không tìm thấy file dữ liệu` khi build index                                   | Chưa crawl (Bước 1) hoặc sai`DATA_PATH`; lệnh phải chạy từ thư mục `backend/`                                                       |
+| Lỗi lệch số chiều vector khi chat                                                  | Index được tạo bằng model embedding khác — chạy lại`python -m app.scripts.ingest`                                                      |
+| Bot luôn trả lời "chưa tìm thấy thông tin"                                      | Chưa build index (Bước 3), hoặc ngưỡng`RAG_MIN_SCORE` / `RERANK_MIN_SCORE` quá cao                                                     |
+| `Fatal error in launcher: Unable to create process…` khi gọi `pip` / `uvicorn` | Thư mục dự án bị đổi tên/di chuyển sau khi tạo venv. Dùng`python -m pip …`, `python -m uvicorn …`, hoặc xoá và tạo lại venv |
+| Trả lời rất chậm                                                                   | Đang bật`RERANK_ENABLED=true` trên máy không có GPU — tắt đi, xem [docs/RAG.md](docs/RAG.md)                                            |
+| `502` — model not found / quota exceeded                                            | Đổi`GEMINI_MODEL` sang model còn được hỗ trợ trong tài khoản của bạn, hoặc chờ hết giới hạn quota                              |
+| Frontend báo lỗi mạng / CORS                                                        | Backend chưa chạy, hoặc`CORS_ORIGINS` chưa gồm origin của frontend                                                                        |
+
+## Bản quyền dữ liệu
+
+Nội dung crawl thuộc về Vinmec, MEDLATEC và Báo Sức khỏe & Đời sống; dự án chỉ dùng cho mục đích học tập/thử nghiệm cá nhân. Dữ liệu từ suckhoedoisong.vn yêu cầu trích dẫn nguồn khi dùng cho AI/RAG (trường `citation` đã có sẵn trong dữ liệu). Chi tiết xem [data-collection/README.md](data-collection/README.md).

@@ -42,20 +42,30 @@ class ChromaVectorStore:
 			metadatas=[chunk["metadata"] for chunk in chunks],
 		)
 
+	def get_all(self) -> list[dict[str, Any]]:
+		"""Đọc toàn bộ chunk (không kèm vector) — dùng để dựng chỉ mục BM25."""
+		result = self._collection.get(include=["documents", "metadatas"])
+		return [
+			{"id": chunk_id, "text": text, "metadata": metadata or {}}
+			for chunk_id, text, metadata in zip(result["ids"], result["documents"], result["metadatas"])
+		]
+
 	def search(self, query_embedding: list[float], top_k: int) -> list[dict[str, Any]]:
 		result = self._collection.query(
 			query_embeddings=[query_embedding],
 			n_results=top_k,
 			include=["documents", "metadatas", "distances"],
 		)
+		ids = result.get("ids", [[]])[0]
 		documents = result.get("documents", [[]])[0]
 		metadatas = result.get("metadatas", [[]])[0]
 		distances = result.get("distances", [[]])[0]
 		return [
 			{
+				"id": chunk_id,
 				"text": text,
 				"metadata": metadata or {},
 				"score": max(0.0, 1.0 - float(distance)),
 			}
-			for text, metadata, distance in zip(documents, metadatas, distances)
+			for chunk_id, text, metadata, distance in zip(ids, documents, metadatas, distances)
 		]

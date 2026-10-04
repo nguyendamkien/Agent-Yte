@@ -5,3 +5,6 @@ venv/
 .venv/
 storage/
 app/storage/
+
+# Kết quả chạy đánh giá RAG
+eval/results*.json

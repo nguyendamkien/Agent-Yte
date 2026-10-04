@@ -1,9 +1,12 @@
 # Thu thập dữ liệu y tế tiếng Việt (Data Collection cho RAG)
 
 Bộ script crawl nội dung y tế công khai từ các trang uy tín để làm knowledge
-base cho chatbot RAG. **Phạm vi hiện tại chỉ dừng ở bước thu thập + làm sạch
-dữ liệu thô** — chưa làm chunk/embedding/vector DB (xem mục "Bước tiếp theo"
-cuối file).
+base cho chatbot RAG. **Thư mục này chỉ lo bước thu thập + làm sạch dữ liệu
+thô** (ra file `data/*.jsonl`). Việc chunk, embedding và lưu vector DB do
+backend đảm nhận — xem mục "Dùng dữ liệu cho RAG" cuối file.
+
+> Thư mục `data/` không nằm trong git (~74 MB, tạo lại được) — cần chạy
+> crawler để có dữ liệu.
 
 ## Kết quả hiện tại (snapshot)
 
@@ -13,6 +16,7 @@ cuối file).
 | `medlatec.jsonl` | 800 | 15 MB | 800 bài tin tức y khoa mới nhất của Medlatec |
 | `suckhoedoisong.jsonl` | 1122 | 16 MB | Bài gần đây từ 23 chuyên mục y tế của báo Sức khỏe & Đời sống |
 | **`combined.jsonl`** | **2306** | **37 MB** | Gộp cả 3 nguồn trên |
+| `benh_pho_bien_10.jsonl` | 100 | 1.6 MB | Tập con 10 nhóm bệnh phổ biến, có thêm trường `disease_group` — **backend đang dùng mặc định**. Repo chưa có script tạo lại file này |
 
 Phân bố theo chuyên mục (top):
 
@@ -92,10 +96,12 @@ trên). Tuy vậy:
 
 ## Cài đặt
 
+Yêu cầu Python 3.11+.
+
 ```bash
 cd data-collection
 python -m venv venv
-venv\Scripts\activate        # Windows
+venv\Scripts\activate        # Windows; macOS/Linux: source venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -185,10 +191,25 @@ cat data/vinmec.jsonl data/medlatec.jsonl data/suckhoedoisong.jsonl > data/combi
 - Có thể mở rộng thêm nguồn bằng cách tạo file mới trong `crawlers/` theo
   cùng pattern (`run(limit)` trả về list dict theo đúng schema trên).
 
-## Bước tiếp theo (chưa làm trong phạm vi này)
+## Dùng dữ liệu cho RAG
 
-Khi sẵn sàng dựng RAG pipeline đầy đủ: chunk `full_text` (vd. theo
-`sections` hoặc theo ~500 tokens), tạo embedding (Gemini Embedding API,
-hoặc mô hình mã nguồn mở như `bkai-foundation-models/vietnamese-bi-encoder`),
-lưu vào vector DB (Chroma/FAISS/Qdrant), rồi sửa `backend/app/routers/chat.py`
-để truy vấn top-k đoạn liên quan trước khi gọi Gemini sinh câu trả lời.
+Backend đã có sẵn pipeline RAG đọc trực tiếp file trong `data/` — mặc định
+`data/benh_pho_bien_10.jsonl`, đổi qua `DATA_PATH` trong `backend/.env` (vd
+`../data-collection/data/combined.jsonl` để dùng toàn bộ 2.306 bài):
+
+- chunk theo `sections` (mục dài được tách tiếp theo câu, có overlap);
+- tạo embedding bằng OpenAI `text-embedding-3-small` và lưu vào ChromaDB;
+- khi chat, tìm các đoạn liên quan bằng hybrid search (BM25 + vector, gộp RRF)
+  rồi mới gọi Gemini sinh câu trả lời, kèm nguồn (`url`, `citation`) trả về
+  cho frontend.
+
+Chi tiết pipeline: [../docs/RAG.md](../docs/RAG.md).
+
+Sau khi crawl xong, tạo index bằng:
+
+```bash
+cd ../backend
+python -m app.scripts.ingest
+```
+
+Xem hướng dẫn đầy đủ ở [README gốc](../README.md).

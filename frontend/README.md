@@ -1,16 +1,45 @@
-# React + Vite
+# Frontend — ChatBot Y Tế
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Giao diện chat viết bằng React 19 + Vite. Gọi `POST /api/chat` của backend (xem [README gốc](../README.md)).
 
-Currently, two official plugins are available:
+## Tính năng
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Chat hỏi đáp y tế, hiển thị kèm danh sách nguồn tham khảo (link bài gốc) dưới mỗi câu trả lời.
+- Nhiều cuộc trò chuyện trong sidebar, lưu trong `localStorage` của trình duyệt (không lưu ở server).
+- Gửi kèm lịch sử hội thoại mỗi request để chatbot nhớ ngữ cảnh.
 
-## React Compiler
+## Chạy
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+npm install
+copy .env.example .env    # tuỳ chọn; macOS/Linux: cp .env.example .env
+npm run dev               # http://localhost:5173
+```
 
-## Expanding the Oxlint configuration
+Cần backend đang chạy (mặc định `http://localhost:8000`). Nếu backend ở địa chỉ khác, sửa trong `.env`:
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+```
+VITE_API_BASE_URL=http://localhost:8000
+```
+
+## Lệnh
+
+| Lệnh | Tác dụng |
+|---|---|
+| `npm run dev` | Chạy dev server có HMR |
+| `npm run build` | Build production ra thư mục `dist/` |
+| `npm run preview` | Chạy thử bản build |
+| `npm run lint` | Kiểm tra code bằng Oxlint |
+
+## Cấu trúc
+
+```
+src/
+├── App.jsx                  # Giao diện chat chính, quản lý phiên và gọi API
+├── api/chatApi.js           # sendChatMessage(message, history)
+├── components/
+│   ├── Sidebar.jsx          # Danh sách cuộc trò chuyện
+│   ├── MessageBubble.jsx    # Một tin nhắn + nguồn tham khảo
+│   └── ChatInput.jsx        # Ô nhập câu hỏi
+└── utils/sessions.js        # Tạo / đọc / lưu phiên chat vào localStorage
+```
