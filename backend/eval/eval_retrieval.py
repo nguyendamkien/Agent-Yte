@@ -1,6 +1,7 @@
 """Evaluate retrieval quality against the golden set.
 
 Run from backend/:  python -m eval.eval_retrieval [--mode dense|hybrid] [--rerank] [--k 5] [--out eval/results.json]
+                                       [--no-rewrite]
 """
 
 import argparse
@@ -13,6 +14,9 @@ from app.rag.embeddings import embed_texts
 from app.rag.loader import load_documents
 from app.rag.retriever import Retriever
 from app.rag.vector_store import ChromaVectorStore
+from app.schemas import ChatMessage
+from app.services.gemini_service import GeminiService
+from app.services.rag_service import RagService, trim_history
 
 GOLDEN_PATH = Path(__file__).parent / "golden_set.jsonl"
 
@@ -94,6 +98,8 @@ def main() -> None:
 	parser.add_argument("--mode", choices=["dense", "hybrid"], default=None, help="Mặc định RETRIEVAL_MODE")
 	parser.add_argument("--rerank", action="store_true", help="Bật cross-encoder rerank (ONNX)")
 	parser.add_argument("--out", type=Path, default=None, help="Ghi kết quả từng câu ra file JSON")
+	parser.add_argument("--no-rewrite", action="store_true",
+						help="Bỏ đo follow-up viết lại bằng Gemini (không cần GEMINI_API_KEY)")
 	args = parser.parse_args()
 
 	settings = get_settings()
@@ -103,9 +109,18 @@ def main() -> None:
 	store = ChromaVectorStore()
 	retriever = Retriever(store, mode=args.mode, rerank=args.rerank or None)
 
-	# Câu follow-up được chấm 2 lần: nguyên văn (đúng như hệ thống đang chạy) và bản viết lại độc lập.
+	# Câu follow-up được chấm thêm 2 lần: bản viết lại độc lập viết tay (giới hạn trên) và bản do
+	# Gemini viết lại từ history (đúng như hệ thống chạy khi QUERY_REWRITE_ENABLED=true).
 	queries = [(item, item["question"], "as_is") for item in golden]
 	queries += [(item, item["standalone_question"], "standalone") for item in golden if item.get("standalone_question")]
+	rewritten_by: dict[str, str] = {}
+	if not args.no_rewrite:
+		rag = RagService(GeminiService(), retriever)  # dùng đúng build_search_query của server
+		for item in golden:
+			if item.get("history"):
+				history = trim_history([ChatMessage(**m) for m in item["history"]], settings.history_max_turns)
+				rewritten_by[item["id"]] = rag.build_search_query(item["question"], history)
+				queries.append((item, rewritten_by[item["id"]], "rewritten"))
 	vectors = embed_texts([text for _, text, _ in queries])
 
 	rows_by_mode: dict[str, list[dict]] = defaultdict(list)
@@ -123,10 +138,15 @@ def main() -> None:
 	print(f"Golden set: {len(golden)} câu | retrieval={retriever.mode}{rerank} | k={k} | "
 		  f"model={settings.embedding_model} | RAG_MIN_SCORE={settings.rag_min_score}")
 	print_table("Retrieval theo loại câu hỏi", {"ALL": summarize(rows, k), **{t: summarize(r, k) for t, r in sorted(by_type.items())}})
-	print_table("Follow-up: nguyên văn vs viết lại độc lập", {
+	follow_up_table = {
 		"as_is": summarize(by_type["follow_up"], k),
 		"standalone": summarize(rows_by_mode["standalone"], k),
-	})
+	}
+	if rows_by_mode["rewritten"]:
+		follow_up_table["rewritten"] = summarize(rows_by_mode["rewritten"], k)
+	print_table("Follow-up: nguyên văn / viết tay độc lập / Gemini viết lại", follow_up_table)
+	for item_id, query in rewritten_by.items():
+		print(f"  {item_id:<12} → {query}")
 
 	answerable_top1 = sorted(r["top1_score"] for r in rows if "rank" in r and r["rank"] == 1)
 	no_info_top1 = sorted(r["top1_score"] for r in rows if r["type"] in ("out_of_kb", "off_topic"))

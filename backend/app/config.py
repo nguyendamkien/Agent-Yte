@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     rerank_onnx_file: str = "onnx/model_int8.onnx"  # "onnx/model.onnx" = bản fp32 (~2.3 GB)
     rerank_candidates: int = 20  # số ứng viên RRF đưa vào cross-encoder (ít hơn → nhanh hơn)
     rerank_min_score: float = 0.4  # điểm rerank tốt nhất < ngưỡng → coi như không có tài liệu phù hợp
+    # Hội thoại: viết lại câu hỏi nối tiếp thành câu độc lập trước khi retrieve
+    # ("Vậy điều trị thế nào?" → "Điều trị bệnh gout thế nào?"), và chỉ giữ N lượt hỏi–đáp gần nhất.
+    query_rewrite_enabled: bool = True
+    history_max_turns: int = 10
     data_path: str = "../data-collection/data/benh_pho_bien_10.jsonl"
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 

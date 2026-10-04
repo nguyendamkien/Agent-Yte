@@ -139,7 +139,7 @@ def run_item(item: dict, judge_model: str) -> dict:
 	history = [ChatMessage(**m) for m in item["history"]]
 	started = time.perf_counter()
 	try:
-		answer, _, results = with_retry(get_rag_service().ask_with_context, item["question"], history)
+		answer, _, results, search_query = with_retry(get_rag_service().ask_with_context, item["question"], history)
 	except Exception as exc:
 		return {"id": item["id"], "type": item["type"], "question": item["question"], "error": f"generation: {exc}"}
 	latency = time.perf_counter() - started
@@ -148,6 +148,8 @@ def run_item(item: dict, judge_model: str) -> dict:
 	except Exception as exc:
 		return {"id": item["id"], "type": item["type"], "question": item["question"], "answer": answer, "error": f"judge: {exc}"}
 	row = score_item(item, answer, results, verdict)
+	if search_query != item["question"]:
+		row["search_query"] = search_query  # câu hỏi nối tiếp đã được viết lại để retrieve
 	row["latency_s"] = round(latency, 2)
 	return row
 

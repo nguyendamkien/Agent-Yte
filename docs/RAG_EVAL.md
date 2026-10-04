@@ -102,8 +102,20 @@ Nhận xét:
 
 - **Hybrid** cứu các câu dense bỏ lỡ vì thuật ngữ hiếm (`gout-08` — "nốt tophi": BM25 xếp hạng 1, dense hạng 9) hoặc cần nhiều bài (`multi-03` — viêm da cơ địa và hen suyễn). Đổi lại mất `follow-04` ("Còn nước chanh thì sao?"): BM25 kéo lên các bài nước chanh của sỏi thận / dạ dày.
 - **Rerank** đưa chunk đúng lên hạng 1 ở nhiều câu hơn (hit@1 0.84 → 0.91). **10 ứng viên không kém 20 ứng viên** — thậm chí nhỉnh hơn ở hit@3 / hit@5 (lệch 1–2 câu, trong mức ngẫu nhiên của bộ 70 câu) — trong khi nhanh gấp đôi. Chỉ còn `safety-03` trượt (không có bài nào nói trực tiếp về phân đen).
-- **Câu hỏi nối tiếp vẫn là điểm yếu lớn nhất.** Rerank đã kéo hit@5 lên 1.00 (thông tin đúng có lọt vào prompt), nhưng hit@1 chỉ 0.40 — chunk bệnh khác vẫn đứng đầu. Viết lại câu hỏi thành câu độc lập thì đạt 1.00 ở mọi cấu hình. Đây là cải tiến đáng làm nhất.
+- **Câu hỏi nối tiếp từng là điểm yếu lớn nhất** (hit@1 0.40 khi retrieve bằng câu nguyên văn). Đã sửa bằng viết lại câu hỏi — xem mục ngay dưới.
 - **Ngưỡng "không có tài liệu":** cosine không tách được — câu ngoài phạm vi có cosine top-1 tới 0.52, câu có đáp án thấp nhất 0.48. Điểm rerank tách sạch (câu có đáp án ≥ 0.73, câu ngoài phạm vi ≤ 0.17), nên `RERANK_MIN_SCORE = 0.4` chặn cả 5/5 câu ngoài phạm vi ngay ở retrieval.
+
+### Viết lại câu hỏi nối tiếp (`QUERY_REWRITE_ENABLED`)
+
+Đo ngày 04/10/2026 — hybrid + rerank 10 ứng viên, top-5. Dòng `rewritten` dùng đúng `RagService.build_search_query` của server (Gemini `gemini-3.1-flash-lite`, temperature 0) để viết lại 5 câu follow-up từ `history`. Bỏ phần đo này bằng `--no-rewrite`.
+
+| Follow-up (n = 5) | hit@1 | hit@3 | hit@5 | MRR | disease_precision |
+|---|---|---|---|---|---|
+| Nguyên văn (trước khi có viết lại) | 0.40 | 0.80 | 1.00 | 0.62 | 0.32 |
+| Viết tay độc lập (`standalone_question`, giới hạn trên) | 1.00 | 1.00 | 1.00 | 1.00 | 0.88 |
+| **Gemini viết lại (đang dùng)** | **1.00** | **1.00** | **1.00** | **1.00** | 0.76 |
+
+Cả 5 câu được viết lại đúng bệnh ("Vậy điều trị thế nào?" → "Các phương pháp điều trị bệnh gout là gì?"; "Còn nước chanh thì sao?" → "Người suy thận có uống được nước chanh không?"). Chunk đầu tiên luôn đúng bài; `disease_precision` thấp hơn bản viết tay một chút nghĩa là trong top-5 vẫn còn vài chunk bệnh khác ở các hạng dưới. Chi phí: thêm 1 lần gọi Gemini (~1 s) cho mỗi câu hỏi có lịch sử. Chưa chạy lại `eval_rag.py` end-to-end sau thay đổi này.
 
 Sau mỗi thay đổi về chunking, embedding, retrieval, top-k hay ngưỡng điểm, chạy lại script và so với bảng này.
 

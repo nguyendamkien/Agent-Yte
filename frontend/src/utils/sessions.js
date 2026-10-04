@@ -23,12 +23,25 @@ export function loadSessions() {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed.sessions) && parsed.sessions.length > 0) {
-      return parsed;
+      return { ...parsed, sessions: parsed.sessions.map(closeInterruptedReply) };
     }
     return null;
   } catch {
     return null;
   }
+}
+
+/** Tải lại trang khi đang stream để lại bong bóng `pending` — đóng nó lại thay vì quay mãi. */
+function closeInterruptedReply(session) {
+  return {
+    ...session,
+    messages: session.messages.map(({ pending, status: _status, ...message }) => {
+      if (!pending) return message;
+      return message.content
+        ? message
+        : { ...message, content: "Câu trả lời bị gián đoạn do trang được tải lại.", isError: true };
+    }),
+  };
 }
 
 export function saveSessions(sessions, activeSessionId) {

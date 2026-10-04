@@ -107,14 +107,16 @@ Với file 10 bệnh, mỗi chunk trung bình ~590 token; chunk lớn nhất ~1.
 ## Quá trình trả lời câu hỏi (query)
 
 ```
-POST /api/chat ──► Retriever.search ──► build_rag_prompt ──► Gemini ──► { reply, sources }
-                   (hybrid + [rerank])
+POST /api/chat ──► cắt history ──► [viết lại câu hỏi] ──► Retriever.search ──► build_rag_prompt ──► Gemini ──► { reply, sources }
+                                   (chỉ khi có history)     (hybrid + [rerank])
 ```
 
-1. **Retrieve** các chunk liên quan bằng hybrid search (chi tiết ở mục dưới) — `app/rag/retriever.py`.
-2. **Dựng prompt** (`app/rag/prompt.py`): mỗi chunk thành một khối `[Nguồn i] tiêu đề | Mục: ...`, kèm quy tắc chỉ trả lời dựa trên context, không chẩn đoán/kê đơn, khuyên gọi 115 khi cấp cứu.
-3. **Sinh câu trả lời** bằng Gemini (`app/services/gemini_service.py`), có kèm lịch sử hội thoại và system instruction về an toàn y tế.
-4. **Trả về** câu trả lời và danh sách nguồn (title, url) của các chunk đã dùng.
+1. **Cắt lịch sử** (`trim_history` trong `app/services/rag_service.py`): chỉ giữ `HISTORY_MAX_TURNS` lượt hỏi–đáp gần nhất (mặc định 10), bỏ tin nhắn bot đứng đầu (lời chào) để lịch sử luôn bắt đầu bằng câu của người dùng.
+2. **Viết lại câu hỏi** (`QUERY_REWRITE_ENABLED`, mặc định bật; `GeminiService.rewrite_query`): khi đã có lịch sử, Gemini (temperature 0, prompt riêng) viết câu hỏi nối tiếp thành câu độc lập — "Vậy điều trị thế nào?" → "Điều trị bệnh gout như thế nào?". Câu viết lại **chỉ dùng để retrieve**; bước sinh câu trả lời vẫn nhận câu gốc + lịch sử. Gọi Gemini lỗi, kết quả rỗng hoặc dài bất thường (> 300 ký tự) → dùng câu gốc. Câu đầu tiên của cuộc trò chuyện không tốn thêm lần gọi nào.
+3. **Retrieve** các chunk liên quan bằng hybrid search (chi tiết ở mục dưới) — `app/rag/retriever.py`.
+4. **Dựng prompt** (`app/rag/prompt.py`): mỗi chunk thành một khối `[Nguồn i] tiêu đề | Mục: ...` (`i` đánh theo bài, chunk cùng bài chung số), kèm quy tắc chỉ trả lời dựa trên context, không chẩn đoán/kê đơn, khuyên gọi 115 khi cấp cứu.
+5. **Sinh câu trả lời** bằng Gemini (`app/services/gemini_service.py`), có kèm lịch sử hội thoại và system instruction về an toàn y tế.
+6. **Trả về** câu trả lời và danh sách nguồn (title, url), mỗi bài một nguồn theo đúng thứ tự `[Nguồn i]`.
 
 ## Retrieval: hybrid BM25 + dense
 
@@ -235,7 +237,8 @@ Xem [RAG_EVAL.md](RAG_EVAL.md): bộ golden test 70 câu, script đo retrieval (
 
 - **Text chunk không chứa tên bệnh.** `title` chỉ nằm trong metadata, không nằm trong text được embed; 77/428 section dùng heading chung "Tóm tắt". Hệ quả: các chunk cùng loại của các bệnh gần nhau có thể bị lấy nhầm (ví dụ Viêm gan A khi hỏi Viêm gan B). Hướng sửa: đưa `title` vào text chunk.
 - **Khi tắt rerank, `RAG_MIN_SCORE = 0.25` gần như không lọc được gì**: cosine của câu ngoài phạm vi (tới 0.52) chồng lên câu có đáp án (từ 0.48), việc từ chối dựa vào prompt. Bật rerank thì `RERANK_MIN_SCORE` giải quyết được, nhưng rerank chậm trên CPU.
-- **Câu hỏi nối tiếp** ("Vậy điều trị thế nào?") retrieve sai vì chỉ dùng câu hỏi hiện tại, không dùng lịch sử chat.
+- **Câu hỏi nối tiếp** phụ thuộc vào bước viết lại câu hỏi: tắt `QUERY_REWRITE_ENABLED` thì retrieval chỉ dùng câu hỏi hiện tại và lấy sai tài liệu. Bật thì mỗi câu hỏi nối tiếp tốn thêm 1 lần gọi Gemini.
+- **Lịch sử chỉ lưu ở trình duyệt** và bị cắt còn `HISTORY_MAX_TURNS` lượt — chatbot không nhớ thông tin từ các lượt cũ hơn hay từ cuộc trò chuyện khác.
 - **Đường dẫn tương đối** (`DATA_PATH`, `VECTOR_DB_PATH`) chỉ đúng khi chạy lệnh từ thư mục `backend/`.
 - **`reset()` chạy trước khi embed**: nếu ingest lỗi giữa chừng, index sẽ trống hoặc thiếu cho tới khi chạy lại thành công.
 - Bước chunk gộp mọi khoảng trắng/xuống dòng trước khi cắt, nên cấu trúc đoạn văn và danh sách không được giữ.

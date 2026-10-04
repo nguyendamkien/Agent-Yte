@@ -173,6 +173,108 @@
   color: #a12622;
 }
 
+/* Trạng thái chờ (đang tìm tài liệu / đang soạn) trước khi có chữ đầu tiên. */
+.message-status {
+  color: #6b7876;
+  font-style: italic;
+  animation: message-status-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes message-status-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* Con trỏ nhấp nháy cuối đoạn đang được stream. */
+.message-bubble--streaming .message-content > :last-child:not(ul, ol)::after,
+.message-bubble--streaming .message-content > :is(ul, ol):last-child > li:last-child::after {
+  content: "▍";
+  margin-left: 1px;
+  color: #0f9d8c;
+  animation: message-cursor-blink 1s steps(1) infinite;
+}
+
+@keyframes message-cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-status,
+  .message-bubble--streaming *::after {
+    animation: none;
+  }
+}
+
+/* Câu trả lời của bot render từ markdown: bỏ pre-wrap (markdown tự tạo đoạn / dòng). */
+.message-bubble--markdown {
+  white-space: normal;
+}
+
+.message-content > :first-child {
+  margin-top: 0;
+}
+
+.message-content > :last-child {
+  margin-bottom: 0;
+}
+
+.message-bubble--markdown p,
+.message-bubble--markdown ul,
+.message-bubble--markdown ol {
+  margin: 0.45rem 0;
+}
+
+.message-bubble--markdown ul,
+.message-bubble--markdown ol {
+  padding-left: 1.3rem;
+}
+
+.message-bubble--markdown li + li {
+  margin-top: 0.2rem;
+}
+
+.message-bubble--markdown h1,
+.message-bubble--markdown h2,
+.message-bubble--markdown h3,
+.message-bubble--markdown h4 {
+  margin: 0.7rem 0 0.35rem;
+  font-size: 1rem;
+}
+
+.message-bubble--markdown a {
+  color: #087f70;
+}
+
+.message-bubble--markdown code {
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  background: #f0f4f3;
+  font-size: 0.88em;
+}
+
+.message-bubble--markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.message-bubble--markdown th,
+.message-bubble--markdown td {
+  padding: 0.3rem 0.55rem;
+  border: 1px solid #e0e6e4;
+  text-align: left;
+}
+
+.message-bubble--markdown th {
+  background: #f4f7f6;
+}
+
 .message-sources {
   display: flex;
   flex-direction: column;
@@ -181,6 +283,14 @@
   padding-top: 0.55rem;
   border-top: 1px solid #e0e6e4;
   font-size: 0.78rem;
+}
+
+.message-sources ol {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
 }
 
 .message-sources a {

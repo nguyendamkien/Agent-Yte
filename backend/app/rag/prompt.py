@@ -3,12 +3,21 @@
 from typing import Any
 
 
+def source_key(metadata: dict[str, Any]) -> str:
+	"""Khoá nhận diện một bài viết — các chunk cùng bài dùng chung một số [Nguồn i]."""
+	return metadata.get("url") or metadata.get("document_id", "")
+
+
 def build_context(results: list[dict[str, Any]]) -> str:
+	"""Đánh số nguồn theo bài (thứ tự xuất hiện đầu tiên), không theo chunk, để
+	"[Nguồn i]" trong câu trả lời khớp với nguồn thứ i trong danh sách trả về frontend."""
 	if not results:
 		return "Không tìm thấy tài liệu phù hợp trong cơ sở dữ liệu."
+	numbers: dict[str, int] = {}
 	blocks = []
-	for index, result in enumerate(results, start=1):
+	for result in results:
 		metadata = result.get("metadata", {})
+		index = numbers.setdefault(source_key(metadata), len(numbers) + 1)
 		blocks.append(
 			f"[Nguồn {index}] {metadata.get('title', '')} | "
 			f"Mục: {metadata.get('section', '')}\n"

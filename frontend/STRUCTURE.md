@@ -13,10 +13,10 @@ frontend/
     ├── App.css                    # Style cho toàn bộ layout (header/sidebar/chat/footer)
     ├── index.css                  # CSS reset tối giản, áp cho toàn trang
     ├── api/
-    │   └── chatApi.js             # Hàm gọi API backend (fetch POST /api/chat)
+    │   └── chatApi.js             # Gọi backend: fetch POST /api/chat/stream, đọc stream SSE
     ├── components/
     │   ├── Sidebar.jsx            # Danh sách session + nút "Cuộc trò chuyện mới"
-    │   ├── MessageBubble.jsx      # 1 bong bóng chat (của user hoặc bot)
+    │   ├── MessageBubble.jsx      # 1 bong bóng chat; câu trả lời của bot render markdown (react-markdown)
     │   └── ChatInput.jsx          # Ô nhập tin nhắn + nút Gửi
     └── utils/
         └── sessions.js            # Tạo/đọc/ghi session vào localStorage
@@ -43,17 +43,17 @@ Người dùng gõ câu hỏi, bấm Gửi
 ChatInput.handleSubmit          — validate không rỗng, gọi onSend(text), rồi tự xoá input
     ▼
 App.handleSend(text)
-    │  1. Thêm { role: "user", content: text } vào messages của session đang mở
+    │  1. Thêm { role: "user", content: text } và một bong bóng trả lời rỗng
+    │     { role: "model", content: "", pending: true, status } vào session đang mở
     │     (nếu là tin nhắn đầu tiên → tự đặt tên session theo nội dung câu hỏi)
-    │  2. setIsLoading(true) → hiện bong bóng "Đang soạn câu trả lời..."
-    │  3. Gọi sendChatMessage(text, history)  [api/chatApi.js]
+    │  2. setIsLoading(true) → khoá ô nhập
+    │  3. Gọi streamChatMessage(text, history, handlers)  [api/chatApi.js]
     ▼
-chatApi.sendChatMessage          — fetch POST {API_BASE_URL}/api/chat, body { message, history }
-    ▼
-Backend FastAPI xử lý, trả về { reply, disclaimer }
-    ▼
-App.handleSend (tiếp)           — thêm { role: "model", content: reply } vào messages
-                                    (nếu lỗi → thêm bong bóng lỗi isError: true)
+chatApi.streamChatMessage        — fetch POST {API_BASE_URL}/api/chat/stream, đọc từng sự kiện SSE:
+    │   status  → bong bóng hiện "Đang phân tích câu hỏi… / Đang tìm tài liệu… / Đang soạn…"
+    │   sources → lưu nguồn (chỉ hiện khi đã có chữ)
+    │   delta   → nối thêm chữ vào content, bong bóng render markdown + con trỏ nhấp nháy
+    │   done    → bỏ cờ pending;  error → bong bóng lỗi (hoặc giữ phần đã có + ghi chú bị ngắt)
     ▼
 useEffect trong App.jsx         — mỗi lần messages đổi, tự saveSessions() vào localStorage
                                     và cuộn khung chat xuống cuối
@@ -89,13 +89,16 @@ Component thuần hiển thị — nhận `role` ("user" | "model"), `content`, 
 Giữ state cục bộ `value` cho ô input. Khi submit form: trim() nội dung, nếu rỗng hoặc đang `disabled` (đang loading) thì bỏ qua; ngược lại gọi `onSend(trimmed)` rồi tự xoá ô input.
 
 ### `src/api/chatApi.js`
-Hàm `sendChatMessage(message, history)` — nơi **duy nhất** trong frontend gọi ra backend. Đọc `API_BASE_URL` từ biến môi trường `VITE_API_BASE_URL` (fallback `http://localhost:8000` nếu không set). Nếu response không `ok`, cố đọc field `detail` trong JSON lỗi (đúng format `HTTPException` của FastAPI) để hiện thông báo lỗi dễ hiểu hơn.
+Hàm `streamChatMessage(message, history, { onStatus, onSources, onDelta })` — nơi **duy nhất** trong frontend gọi ra backend. Đọc `API_BASE_URL` từ biến môi trường `VITE_API_BASE_URL` (fallback `http://localhost:8000` nếu không set).
+- Dùng `fetch` + `ReadableStream` thay vì `EventSource` vì `EventSource` chỉ gửi được GET.
+- Tách stream theo dòng trống (`\n\n`), mỗi khối là một sự kiện `event:` / `data:` (JSON) rồi gọi handler tương ứng. Promise resolve ở sự kiện `done`, reject khi gặp sự kiện `error` hoặc stream đóng giữa chừng.
+- Nếu response không `ok` (lỗi trước khi stream, vd 500 thiếu API key), cố đọc field `detail` trong JSON lỗi để hiện thông báo dễ hiểu hơn.
 
 ### `src/utils/sessions.js`
 Tách riêng logic liên quan tới `localStorage` khỏi `App.jsx`:
 - `WELCOME_MESSAGE`: tin nhắn chào mặc định khi tạo session mới.
 - `createSession()`: tạo object session mới với `id` random (`crypto.randomUUID()`).
-- `loadSessions()` / `saveSessions()`: đọc/ghi vào `localStorage` dưới key `chatbot-y-te-sessions`, có `try/catch` để không crash app nếu trình duyệt chặn localStorage (vd. chế độ ẩn danh).
+- `loadSessions()` / `saveSessions()`: đọc/ghi vào `localStorage` dưới key `chatbot-y-te-sessions`, có `try/catch` để không crash app nếu trình duyệt chặn localStorage (vd. chế độ ẩn danh). Khi đọc, bong bóng còn `pending` (trang bị tải lại giữa lúc stream) được đóng lại thay vì hiện trạng thái chờ mãi.
 - `deriveTitle(text)`: cắt câu hỏi đầu tiên còn tối đa 32 ký tự để làm tên session hiển thị trên Sidebar.
 
 ### `App.css` / `index.css`

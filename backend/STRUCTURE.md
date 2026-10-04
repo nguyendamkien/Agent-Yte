@@ -13,7 +13,7 @@ backend/
 │   ├── config.py                  # Đọc cấu hình từ .env (Settings)
 │   ├── schemas.py                 # Định nghĩa request/response body (Pydantic models)
 │   ├── routers/
-│   │   └── chat.py                # Endpoint POST /api/chat
+│   │   └── chat.py                # POST /api/chat (trả một lần) và POST /api/chat/stream (SSE)
 │   ├── services/
 │   │   ├── rag_service.py         # Điều phối một câu hỏi: retrieve → prompt → Gemini → nguồn
 │   │   └── gemini_service.py      # Gọi Google Gemini, chứa system instruction an toàn y tế
@@ -104,18 +104,25 @@ Frontend hiển thị câu trả lời + danh sách nguồn
 
 ### `app/routers/chat.py`
 - `APIRouter(prefix="/api")` — mọi route trong file có tiền tố `/api`.
-- `POST /api/chat`: gọi `get_rag_service().ask(message, history)`, bọc kết quả vào `ChatResponse`.
+- `POST /api/chat`: gọi `get_rag_service().ask(message, history)`, bọc kết quả vào `ChatResponse`. Frontend không dùng nữa; giữ cho script đánh giá và gọi API trực tiếp.
+- `POST /api/chat/stream` (frontend dùng): cùng body, trả `text/event-stream` từ `RagService.ask_stream`. Thứ tự sự kiện:
+  - `status` `{stage}` — `rewriting` (chỉ khi có history) → `retrieving` → `generating`
+  - `sources` `{sources}` — ngay sau khi retrieve xong
+  - `delta` `{text}` — từng đoạn câu trả lời từ Gemini (`GeminiService.ask_stream`, `stream=True`)
+  - `done` `{disclaimer}` — kết thúc; hoặc `error` `{detail}` nếu lỗi giữa chừng (HTTP status lúc đó đã là 200, không đổi được nữa)
+- Header `X-Accel-Buffering: no` để nginx (nếu deploy sau proxy) không gom sự kiện lại.
 - Map lỗi sang HTTP status:
   - `RuntimeError` (vd thiếu API key) → **500** — lỗi cấu hình phía server.
   - Exception khác (mạng, quota, key sai…) → **502** — lỗi từ dịch vụ bên ngoài.
 
 ### `app/services/rag_service.py`
-- `RagService.ask(message, history)`: retrieve → dựng prompt → gọi Gemini → gom `sources` từ metadata của các chunk. Trả về `(reply, sources)`.
-- `RagService.ask_with_context(...)`: như trên nhưng trả thêm danh sách chunk đã retrieve — dùng cho `eval/eval_rag.py`.
+- `RagService.ask(message, history)`: cắt history còn `HISTORY_MAX_TURNS` lượt (`trim_history`) → viết lại câu hỏi nối tiếp thành câu độc lập để retrieve (`build_search_query`, khi `QUERY_REWRITE_ENABLED`) → retrieve → dựng prompt → gọi Gemini → `collect_sources` gom `sources` từ metadata, **mỗi bài một nguồn** (nhiều chunk cùng bài chỉ tính một lần). Trả về `(reply, sources)`.
+- `RagService.ask_with_context(...)`: như trên nhưng trả thêm danh sách chunk đã retrieve và câu đã dùng để retrieve — dùng cho `eval/eval_rag.py`.
 - `get_rag_service()`: singleton — `GeminiService` và `Retriever` (kèm việc dựng chỉ mục BM25) chỉ được tạo ở request đầu tiên rồi tái sử dụng.
 
 ### `app/services/gemini_service.py`
 - `SYSTEM_INSTRUCTION`: prompt hệ thống cố định — không chẩn đoán cá nhân, không kê đơn, khuyến cáo đi khám / gọi 115 khi có dấu hiệu nguy hiểm. Sửa "cách cư xử" của chatbot ở đây; sửa quy tắc bám context ở `rag/prompt.py`.
+- `GeminiService.rewrite_query(message, history)`: gọi Gemini với prompt riêng (`REWRITE_INSTRUCTION`, temperature 0) để viết câu hỏi nối tiếp thành câu độc lập; câu trả lời cũ của bot chỉ lấy 500 ký tự đầu.
 - `GeminiService.ask(message, history)`: chuyển `history` sang format Gemini SDK (`{"role", "parts"}`), mở phiên chat với lịch sử đó và gửi prompt RAG làm tin nhắn mới nhất.
 
 ### `app/rag/loader.py`
@@ -151,7 +158,7 @@ Frontend hiển thị câu trả lời + danh sách nguồn
 - `get_reranker()`: nạp model một lần cho cả tiến trình; lần đầu tự tải model (~571 MB) về cache Hugging Face.
 
 ### `app/rag/prompt.py`
-- `build_context(results)`: mỗi chunk thành khối `[Nguồn i] tiêu đề | Mục: …` kèm nội dung và URL; không có chunk thì ghi "Không tìm thấy tài liệu phù hợp…".
+- `build_context(results)`: mỗi chunk thành khối `[Nguồn i] tiêu đề | Mục: …` kèm nội dung và URL. `i` đánh theo **bài**, không theo chunk (chunk cùng bài chung số), cùng thứ tự với `sources` trả về frontend — nên "[Nguồn i]" trong câu trả lời khớp với nguồn thứ i hiển thị; không có chunk thì ghi "Không tìm thấy tài liệu phù hợp…".
 - `build_rag_prompt(question, context)`: quy tắc chỉ trả lời dựa trên context, không bịa, không kê đơn, gặp dấu hiệu cấp cứu thì khuyên gọi 115.
 
 ### `app/scripts/ingest.py`

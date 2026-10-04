@@ -3,7 +3,7 @@ import "./App.css";
 import Sidebar from "./components/Sidebar";
 import MessageBubble from "./components/MessageBubble";
 import ChatInput from "./components/ChatInput";
-import { sendChatMessage } from "./api/chatApi";
+import { streamChatMessage } from "./api/chatApi";
 import {
   createSession,
   deriveTitle,
@@ -47,10 +47,10 @@ function App() {
   async function handleSend(text) {
     const sessionId = activeSession.id;
     const userMessage = { role: "user", content: text };
-    const history = activeSession.messages.map(({ role, content }) => ({
-      role,
-      content,
-    }));
+    // Bỏ tin nhắn lỗi / câu trả lời rỗng (bị ngắt) khỏi lịch sử gửi cho backend.
+    const history = activeSession.messages
+      .filter((m) => !m.isError && m.content)
+      .map(({ role, content }) => ({ role, content }));
 
     setSessions((prev) =>
       prev.map((session) => {
@@ -59,23 +59,35 @@ function App() {
         return {
           ...session,
           title: isFirstUserMessage ? deriveTitle(text) : session.title,
-          messages: [...session.messages, userMessage],
+          // Bong bóng trả lời rỗng được thêm ngay, rồi điền dần khi stream về.
+          messages: [
+            ...session.messages,
+            userMessage,
+            { role: "model", content: "", sources: [], pending: true, status: "retrieving" },
+          ],
         };
       })
     );
     setIsLoading(true);
 
+    // Chỉ sửa tin nhắn cuối (bong bóng đang stream) của session đã gửi câu hỏi.
+    const updateReply = (updater) =>
+      updateSessionMessages(sessionId, (msgs) => [...msgs.slice(0, -1), updater(msgs.at(-1))]);
+
     try {
-      const data = await sendChatMessage(text, history);
-      updateSessionMessages(sessionId, (msgs) => [
-        ...msgs,
-        { role: "model", content: data.reply, sources: data.sources ?? [] },
-      ]);
+      await streamChatMessage(text, history, {
+        onStatus: (stage) => updateReply((m) => ({ ...m, status: stage })),
+        onSources: (sources) => updateReply((m) => ({ ...m, sources })),
+        onDelta: (delta) => updateReply((m) => ({ ...m, content: m.content + delta })),
+      });
+      updateReply(({ pending: _pending, status: _status, ...m }) => m);
     } catch (error) {
-      updateSessionMessages(sessionId, (msgs) => [
-        ...msgs,
-        { role: "model", content: `Đã có lỗi xảy ra: ${error.message}`, isError: true },
-      ]);
+      updateReply(({ pending: _pending, status: _status, ...m }) =>
+        m.content
+          ? // Đã có một phần câu trả lời: giữ lại, ghi chú bị ngắt.
+            { ...m, content: `${m.content}\n\n*(Câu trả lời bị gián đoạn: ${error.message})*` }
+          : { ...m, content: `Đã có lỗi xảy ra: ${error.message}`, isError: true, sources: [] }
+      );
     } finally {
       setIsLoading(false);
     }
@@ -122,11 +134,10 @@ function App() {
                 content={message.content}
                 isError={message.isError}
                 sources={message.sources}
+                pending={message.pending}
+                status={message.status}
               />
             ))}
-            {isLoading && (
-              <MessageBubble role="model" content="Đang soạn câu trả lời..." />
-            )}
             <div ref={messagesEndRef} />
           </main>
 
