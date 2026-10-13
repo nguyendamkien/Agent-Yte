@@ -12,15 +12,17 @@ Chatbot hỏi đáp thông tin y tế tiếng Việt, dùng **RAG** (Retrieval-A
    crawl 3 nguồn          100 bài, 10 nhóm bệnh          chunk + embedding OpenAI   app/storage/chroma
 
                         (2) Mỗi câu hỏi của người dùng
- Frontend (React)  ──►  POST /api/chat  ──►  hybrid retrieval: BM25 + dense (Chroma), gộp RRF
-                                                                       │ top-5 chunk
- Frontend hiển thị  ◄──  { reply, sources, disclaimer }  ◄──  Gemini sinh câu trả lời
+ Frontend (React)  ──►  POST /api/chat/stream  ──►  viết lại câu hỏi nối tiếp (nếu có lịch sử)
+                                                  ──►  hybrid retrieval: BM25 + dense (Chroma), gộp RRF
+                                                  ──►  rerank cross-encoder  ──►  top-5 chunk
+                                                                       │
+ Frontend hiển thị  ◄──  SSE: sources, từng đoạn trả lời  ◄──  Gemini sinh câu trả lời
  câu trả lời + nguồn                                            từ context + lịch sử chat
 ```
 
 | Thư mục                           | Vai trò                                       | Công nghệ                                                                             |
 | ----------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------- |
-| [backend/](backend/)                 | API chat + pipeline RAG                        | FastAPI, OpenAI embedding, Gemini API, ChromaDB, BM25, ONNX Runtime (rerank tuỳ chọn) |
+| [backend/](backend/)                 | API chat + pipeline RAG                        | FastAPI, OpenAI embedding, Gemini API, ChromaDB, BM25, ONNX Runtime (rerank)         |
 | [frontend/](frontend/)               | Giao diện chat, lưu nhiều cuộc hội thoại | React 19, Vite                                                                          |
 | [data-collection/](data-collection/) | Crawler thu thập dữ liệu y tế              | requests, BeautifulSoup                                                                 |
 | [docs/](docs/)                       | Tài liệu pipeline RAG và cách đánh giá  | —                                                                                      |
@@ -111,7 +113,7 @@ Chi tiết và kết quả: [docs/RAG_EVAL.md](docs/RAG_EVAL.md).
 | Biến                 | Mặc định                                        | Ý nghĩa                                                                           |
 | --------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | `GEMINI_API_KEY`    | *(bắt buộc)*                                   | API key của Gemini                                                                 |
-| `GEMINI_MODEL`      | `gemini-1.5-flash`                               | Model sinh câu trả lời                                                           |
+| `GEMINI_MODEL`      | `gemini-3.1-flash-lite`                          | Model sinh câu trả lời và viết lại câu hỏi                                       |
 | `OPENAI_API_KEY`    | *(bắt buộc)*                                   | API key của OpenAI, dùng cho embedding                                            |
 | `EMBEDDING_MODEL`   | `text-embedding-3-small`                         | Model embedding (đổi thì phải chạy lại ingest)                                |
 | `DATA_PATH`         | `../data-collection/data/benh_pho_bien_10.jsonl` | File dữ liệu dùng để build index                                               |
@@ -119,7 +121,9 @@ Chi tiết và kết quả: [docs/RAG_EVAL.md](docs/RAG_EVAL.md).
 | `VECTOR_COLLECTION` | `medical_documents`                              | Tên collection trong Chroma                                                        |
 | `RAG_TOP_K`         | `5`                                              | Số chunk đưa vào prompt cho mỗi câu hỏi                                      |
 | `RETRIEVAL_MODE`    | `hybrid`                                         | `hybrid` (BM25 + dense, gộp RRF) hoặc `dense`                                 |
-| `RERANK_ENABLED`    | `false`                                          | Bật rerank cross-encoder — chính xác hơn nhưng chậm ~10–25 s/câu trên CPU |
+| `RERANK_ENABLED`    | `true`                                           | Rerank cross-encoder (~11 s/câu trên CPU, lần đầu tải model ~571 MB). Mọi số đo chất lượng đều dùng rerank; tắt thì nhanh hơn nhưng câu ngoài phạm vi không bị chặn ở retrieval |
+| `QUERY_REWRITE_ENABLED` | `true`                                       | Viết lại câu hỏi nối tiếp ("Vậy điều trị thế nào?") thành câu độc lập trước khi tìm tài liệu — thêm 1 lần gọi Gemini (~1 s) khi đã có lịch sử |
+| `HISTORY_MAX_TURNS` | `10`                                             | Số lượt hỏi–đáp gần nhất gửi kèm (1 lượt = 1 câu hỏi + 1 câu trả lời)         |
 | `CORS_ORIGINS`      | `http://localhost:5173,http://127.0.0.1:5173`    | Các origin frontend được phép gọi API                                         |
 
 Các biến còn lại (`RAG_MIN_SCORE`, `RAG_CANDIDATES`, `RRF_K`, `RERANK_*`): xem mục "Cấu hình liên quan" trong [docs/RAG.md](docs/RAG.md).
@@ -163,6 +167,20 @@ Response:
 - Lỗi: `500` khi cấu hình sai (vd. thiếu API key), `502` khi gọi Gemini thất bại (mạng, quota, key sai, model không tồn tại).
 - `GET /` trả về `{"status": "ok"}` để kiểm tra server còn sống.
 
+### `POST /api/chat/stream`
+
+Cùng request với `/api/chat`, nhưng trả về **Server-Sent Events** để hiển thị câu trả lời dần dần (frontend dùng endpoint này). Các sự kiện theo thứ tự:
+
+| Sự kiện | `data` | Ý nghĩa |
+|---|---|---|
+| `status` | `{"stage": "rewriting" \| "retrieving" \| "generating"}` | Bước đang chạy (`rewriting` chỉ có khi có `history`) |
+| `sources` | `{"sources": [{title, url, citation}]}` | Nguồn tham khảo, gửi ngay sau khi tìm tài liệu xong |
+| `delta` | `{"text": "…"}` | Một đoạn câu trả lời — nối các `delta` lại thành câu trả lời đầy đủ |
+| `done` | `{"disclaimer": "…"}` | Kết thúc |
+| `error` | `{"detail": "…"}` | Lỗi khi stream đã bắt đầu (HTTP status lúc đó đã là 200) |
+
+Lỗi cấu hình (thiếu API key…) vẫn trả về HTTP `500` trước khi mở stream.
+
 ## Cấu trúc thư mục
 
 ```
@@ -175,7 +193,7 @@ Response:
 │   ├── app/
 │   │   ├── config.py             # Settings đọc từ .env
 │   │   ├── schemas.py            # Pydantic models (request/response)
-│   │   ├── routers/chat.py       # POST /api/chat
+│   │   ├── routers/chat.py       # POST /api/chat, POST /api/chat/stream (SSE)
 │   │   ├── services/
 │   │   │   ├── rag_service.py    # Điều phối: retrieve → gọi Gemini → gom nguồn
 │   │   │   └── gemini_service.py # Gọi Gemini, chứa system prompt an toàn y tế
@@ -186,7 +204,7 @@ Response:
 │   │   │   ├── vector_store.py   # Bọc ChromaDB
 │   │   │   ├── bm25.py           # Chỉ mục BM25 trong RAM (tìm theo từ khoá)
 │   │   │   ├── retriever.py      # Hybrid BM25 + dense, gộp RRF, ngưỡng, gọi rerank
-│   │   │   ├── reranker.py       # Cross-encoder bge-reranker-v2-m3 (ONNX, tuỳ chọn)
+│   │   │   ├── reranker.py       # Cross-encoder bge-reranker-v2-m3 (ONNX)
 │   │   │   └── prompt.py         # Ghép context + câu hỏi thành prompt
 │   │   └── scripts/ingest.py     # Tạo vector index
 │   └── eval/
@@ -223,7 +241,7 @@ Response:
 | Lỗi lệch số chiều vector khi chat                                                  | Index được tạo bằng model embedding khác — chạy lại`python -m app.scripts.ingest`                                                      |
 | Bot luôn trả lời "chưa tìm thấy thông tin"                                      | Chưa build index (Bước 3), hoặc ngưỡng`RAG_MIN_SCORE` / `RERANK_MIN_SCORE` quá cao                                                     |
 | `Fatal error in launcher: Unable to create process…` khi gọi `pip` / `uvicorn` | Thư mục dự án bị đổi tên/di chuyển sau khi tạo venv. Dùng`python -m pip …`, `python -m uvicorn …`, hoặc xoá và tạo lại venv |
-| Trả lời rất chậm                                                                   | Đang bật`RERANK_ENABLED=true` trên máy không có GPU — tắt đi, xem [docs/RAG.md](docs/RAG.md)                                            |
+| Trả lời rất chậm                                                                   | Rerank (bật mặc định) mất ~11 s/câu trên CPU; câu hỏi đầu tiên sau khi khởi động còn phải tải/nạp model. Cần nhanh hơn thì đặt `RERANK_ENABLED=false` (chất lượng giảm, xem [docs/RAG.md](docs/RAG.md)) |
 | `502` — model not found / quota exceeded                                            | Đổi`GEMINI_MODEL` sang model còn được hỗ trợ trong tài khoản của bạn, hoặc chờ hết giới hạn quota                              |
 | Frontend báo lỗi mạng / CORS                                                        | Backend chưa chạy, hoặc`CORS_ORIGINS` chưa gồm origin của frontend                                                                        |
 

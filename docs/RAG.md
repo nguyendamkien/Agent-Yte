@@ -1,18 +1,18 @@
 # Pipeline RAG — ingest, retrieval và model sử dụng
 
-Tài liệu mô tả pipeline RAG của backend: dữ liệu được đưa vào vector DB như thế nào (ingest), mỗi câu hỏi được tìm tài liệu ra sao (retrieval: hybrid BM25 + dense, tuỳ chọn rerank) và được trả lời thế nào (generation). Cách đo chất lượng: xem [RAG_EVAL.md](RAG_EVAL.md).
+Tài liệu mô tả pipeline RAG của backend: dữ liệu được đưa vào vector DB như thế nào (ingest), mỗi câu hỏi được tìm tài liệu ra sao (retrieval: hybrid BM25 + dense, rerank cross-encoder) và được trả lời thế nào (generation). Cách đo chất lượng: xem [RAG_EVAL.md](RAG_EVAL.md).
 
-**Cấu hình đang chạy:** embedding `text-embedding-3-small` (OpenAI) · retrieval **hybrid** BM25 + dense gộp bằng RRF · **rerank bật** bằng `bge-reranker-v2-m3` với 10 ứng viên (~11–12 s/câu trên CPU; bật qua `backend/.env`, mặc định trong code là tắt) · sinh câu trả lời bằng Gemini · dữ liệu 10 nhóm bệnh (100 bài, 505 chunk).
+**Cấu hình đang chạy:** embedding `text-embedding-3-small` (OpenAI) · retrieval **hybrid** BM25 + dense gộp bằng RRF · **rerank bật** bằng `bge-reranker-v2-m3` với 10 ứng viên (~11–12 s/câu trên CPU; mặc định bật, tắt bằng `RERANK_ENABLED=false`) · sinh câu trả lời bằng Gemini · dữ liệu 10 nhóm bệnh (100 bài, 505 chunk).
 
 ## Model sử dụng
 
 | Vai trò | Model | Nhà cung cấp | Cấu hình (`backend/.env`) |
 |---|---|---|---|
 | Embedding (tài liệu + câu hỏi) | `text-embedding-3-small` — vector 1536 chiều | OpenAI | `OPENAI_API_KEY`, `EMBEDDING_MODEL` |
-| Sinh câu trả lời | Gemini (mặc định `gemini-1.5-flash`, ghi đè bằng `.env`) | Google | `GEMINI_API_KEY`, `GEMINI_MODEL` |
+| Sinh câu trả lời | Gemini (mặc định `gemini-3.1-flash-lite`, ghi đè bằng `.env`) | Google | `GEMINI_API_KEY`, `GEMINI_MODEL` |
 | Vector DB | ChromaDB (lưu trên đĩa), khoảng cách cosine | — | `VECTOR_DB_PATH`, `VECTOR_COLLECTION` |
 | Tìm kiếm từ khoá | BM25 tự cài đặt, chỉ mục trong RAM (`app/rag/bm25.py`) | — | `RETRIEVAL_MODE`, `RAG_CANDIDATES` |
-| Rerank (tuỳ chọn) | Cross-encoder `BAAI/bge-reranker-v2-m3` — chạy bản ONNX int8 | BAAI, chạy local bằng ONNX Runtime | `RERANK_ENABLED`, `RERANK_CANDIDATES`, `RERANK_MIN_SCORE` |
+| Rerank (mặc định bật) | Cross-encoder `BAAI/bge-reranker-v2-m3` — chạy bản ONNX int8 | BAAI, chạy local bằng ONNX Runtime | `RERANK_ENABLED`, `RERANK_CANDIDATES`, `RERANK_MIN_SCORE` |
 
 **Lưu ý quan trọng:** tài liệu và câu hỏi phải được embed bằng **cùng một model**. Khi đổi `EMBEDDING_MODEL` (hoặc đổi sang nhà cung cấp khác) bắt buộc chạy lại ingest, nếu không Chroma sẽ báo lỗi lệch số chiều vector hoặc trả kết quả sai.
 
@@ -107,14 +107,14 @@ Với file 10 bệnh, mỗi chunk trung bình ~590 token; chunk lớn nhất ~1.
 ## Quá trình trả lời câu hỏi (query)
 
 ```
-POST /api/chat ──► cắt history ──► [viết lại câu hỏi] ──► Retriever.search ──► build_rag_prompt ──► Gemini ──► { reply, sources }
+POST /api/chat ──► cắt history ──► [viết lại câu hỏi] ──► Retriever.search ──► build_prompt ──► Gemini ──► { reply, sources }
                                    (chỉ khi có history)     (hybrid + [rerank])
 ```
 
 1. **Cắt lịch sử** (`trim_history` trong `app/services/rag_service.py`): chỉ giữ `HISTORY_MAX_TURNS` lượt hỏi–đáp gần nhất (mặc định 10), bỏ tin nhắn bot đứng đầu (lời chào) để lịch sử luôn bắt đầu bằng câu của người dùng.
 2. **Viết lại câu hỏi** (`QUERY_REWRITE_ENABLED`, mặc định bật; `GeminiService.rewrite_query`): khi đã có lịch sử, Gemini (temperature 0, prompt riêng) viết câu hỏi nối tiếp thành câu độc lập — "Vậy điều trị thế nào?" → "Điều trị bệnh gout như thế nào?". Câu viết lại **chỉ dùng để retrieve**; bước sinh câu trả lời vẫn nhận câu gốc + lịch sử. Gọi Gemini lỗi, kết quả rỗng hoặc dài bất thường (> 300 ký tự) → dùng câu gốc. Câu đầu tiên của cuộc trò chuyện không tốn thêm lần gọi nào.
 3. **Retrieve** các chunk liên quan bằng hybrid search (chi tiết ở mục dưới) — `app/rag/retriever.py`.
-4. **Dựng prompt** (`app/rag/prompt.py`): mỗi chunk thành một khối `[Nguồn i] tiêu đề | Mục: ...` (`i` đánh theo bài, chunk cùng bài chung số), kèm quy tắc chỉ trả lời dựa trên context, không chẩn đoán/kê đơn, khuyên gọi 115 khi cấp cứu.
+4. **Dựng prompt** (`app/rag/prompt.py`): mỗi chunk thành một khối `[Nguồn i] tiêu đề | Mục: ...` (`i` đánh theo bài, chunk cùng bài chung số), kèm quy tắc chỉ trả lời dựa trên context, không chẩn đoán/kê đơn, khuyên gọi 115 khi cấp cứu. Không có chunk nào → dùng prompt riêng (`build_no_context_prompt`): tối đa 3 câu, nói chưa có thông tin / từ chối câu ngoài lĩnh vực sức khỏe, khuyên đi khám hoặc gọi 115, **cấm nêu** triệu chứng, nguyên nhân, con số, thuốc, điều trị, tiên lượng — với prompt chung, Gemini nói "chưa tìm thấy" nhưng vẫn kể thêm kiến thức của nó.
 5. **Sinh câu trả lời** bằng Gemini (`app/services/gemini_service.py`), có kèm lịch sử hội thoại và system instruction về an toàn y tế.
 6. **Trả về** câu trả lời và danh sách nguồn (title, url), mỗi bài một nguồn theo đúng thứ tự `[Nguồn i]`.
 
@@ -156,12 +156,12 @@ Kết quả sau khi gộp được sắp theo điểm RRF và lấy `RAG_TOP_K` 
 
 ### Ngưỡng "không có tài liệu phù hợp"
 
-Áp cho **cả câu hỏi**, không cho từng chunk (chunk chỉ đến từ BM25 không có điểm cosine). Trả về rỗng → prompt báo "Không tìm thấy tài liệu phù hợp".
+Áp cho **cả câu hỏi**, không cho từng chunk (chunk chỉ đến từ BM25 không có điểm cosine). Trả về rỗng → dùng prompt "không có tài liệu" (`build_no_context_prompt`).
 
 - Luôn kiểm tra: cosine tốt nhất của nhánh dense < `RAG_MIN_SCORE` (0.25).
 - Khi bật rerank, thêm: điểm rerank tốt nhất < `RERANK_MIN_SCORE` (0.4). Ngưỡng này hiệu quả hơn hẳn — xem bảng ở mục rerank.
 
-### Rerank bằng cross-encoder (tuỳ chọn) — `app/rag/reranker.py`
+### Rerank bằng cross-encoder — `app/rag/reranker.py`
 
 Bi-encoder và BM25 đều không "đọc" câu hỏi cùng với chunk. Cross-encoder ghép `[câu hỏi] + [chunk]` thành **một** đầu vào cho transformer, nên attention thấy được tương tác giữa từng từ của hai bên và cho điểm liên quan chính xác hơn — đổi lại phải chạy model cho từng cặp, nên chỉ dùng để chấm lại `RERANK_CANDIDATES` ứng viên tốt nhất sau RRF (hiện đặt 10) rồi giữ top-5.
 
@@ -170,7 +170,7 @@ Bi-encoder và BM25 đều không "đọc" câu hỏi cùng với chunk. Cross-e
 - Chạy bằng **ONNX Runtime, không dùng PyTorch**; các thư viện cần (`onnxruntime`, `tokenizers`, `huggingface_hub`, `numpy`) đã có sẵn nhờ `chromadb`. Model tự tải lần đầu vào cache Hugging Face.
 - **Vì sao không dùng PyTorch:** trên máy phát triển, **Smart App Control** của Windows 11 đang bật (chế độ Enforce) và chặn `torch.dll`. Nhật ký `Microsoft-Windows-CodeIntegrity/Operational` ghi sự kiện 3033/3077: *"did not meet the Enterprise signing level requirements"*, policy `{0283ac0f-fff1-49ae-ada1-8a933130cad6}`. Smart App Control chỉ cho nạp file thực thi/DLL có chữ ký số tin cậy hoặc có uy tín trên dịch vụ đám mây của Microsoft; các DLL trong wheel PyTorch không đáp ứng, còn DLL của `onnxruntime` do Microsoft ký nên chạy bình thường. Máy không có GPU NVIDIA nên PyTorch cũng không nhanh hơn ONNX Runtime ở đây.
 - Mỗi chunk trả về có `score` (điểm xếp hạng cuối) và `scores` gồm `dense`, `dense_rank`, `bm25`, `bm25_rank`, `rrf`, `rerank` để debug.
-- Trong code mặc định tắt (`RERANK_ENABLED=false`) vì chậm trên CPU; **hiện đang bật trong `backend/.env`** với `RERANK_CANDIDATES=10`.
+- Mặc định bật (`RERANK_ENABLED=true`, `RERANK_CANDIDATES=10`) — mọi số đo chất lượng đều dùng cấu hình này. Đặt `RERANK_ENABLED=false` nếu cần trả lời nhanh trên CPU yếu.
 
 Điểm rerank tách "có tài liệu / không có tài liệu" tốt hơn cosine nhiều (đo trên golden set):
 
@@ -215,7 +215,7 @@ Hybrid cứu được các câu dense bỏ lỡ vì thuật ngữ hiếm (`gout-
 | `OPENAI_API_KEY` | — | Key gọi OpenAI embedding |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | Model embedding |
 | `GEMINI_API_KEY` | — | Key gọi Gemini |
-| `GEMINI_MODEL` | `gemini-1.5-flash` | Model sinh câu trả lời |
+| `GEMINI_MODEL` | `gemini-3.1-flash-lite` | Model sinh câu trả lời và viết lại câu hỏi |
 | `DATA_PATH` | `../data-collection/data/benh_pho_bien_10.jsonl` | File dữ liệu để ingest |
 | `VECTOR_DB_PATH` | `app/storage/chroma` | Thư mục lưu Chroma |
 | `VECTOR_COLLECTION` | `medical_documents` | Tên collection |
@@ -224,9 +224,9 @@ Hybrid cứu được các câu dense bỏ lỡ vì thuật ngữ hiếm (`gout-
 | `RETRIEVAL_MODE` | `hybrid` | `hybrid` (BM25 + dense, RRF) hoặc `dense` |
 | `RAG_CANDIDATES` | `20` | Số ứng viên mỗi nhánh trước khi gộp / rerank |
 | `RRF_K` | `60` | Hằng số làm phẳng trong RRF |
-| `RERANK_ENABLED` | `false` | Bật rerank cross-encoder (**đang đặt `true` trong `.env`**) |
+| `RERANK_ENABLED` | `true` | Bật rerank cross-encoder |
 | `RERANK_ONNX_REPO` / `RERANK_ONNX_FILE` | `onnx-community/bge-reranker-v2-m3-ONNX` / `onnx/model_int8.onnx` | Model ONNX; `onnx/model.onnx` là bản fp32 (~2.3 GB) |
-| `RERANK_CANDIDATES` | `20` | Số ứng viên RRF đưa vào cross-encoder (**đang đặt `10` trong `.env`**) |
+| `RERANK_CANDIDATES` | `10` | Số ứng viên RRF đưa vào cross-encoder |
 | `RERANK_MIN_SCORE` | `0.4` | Điểm rerank tốt nhất tối thiểu, thấp hơn thì coi như không có tài liệu |
 
 ## Đánh giá

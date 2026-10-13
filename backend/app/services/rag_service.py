@@ -2,7 +2,7 @@ import logging
 from collections.abc import Iterator
 
 from app.config import get_settings
-from app.rag.prompt import build_context, build_rag_prompt, source_key
+from app.rag.prompt import build_prompt, source_key
 from app.rag.retriever import Retriever
 from app.schemas import ChatMessage, Source
 from app.services.gemini_service import GeminiService
@@ -39,7 +39,7 @@ class RagService:
         search_query = self.build_search_query(message, history)
         results = self._retriever.search(search_query)
         # Gemini vẫn nhận câu hỏi gốc + lịch sử; câu viết lại chỉ dùng để tìm tài liệu.
-        prompt = build_rag_prompt(message, build_context(results))
+        prompt = build_prompt(message, results)
         reply = self._gemini.ask(prompt, history)
         return reply, collect_sources(results), results, search_query
 
@@ -60,7 +60,7 @@ class RagService:
         yield "sources", {"sources": [source.model_dump() for source in collect_sources(results)]}
 
         yield "status", {"stage": "generating"}
-        prompt = build_rag_prompt(message, build_context(results))
+        prompt = build_prompt(message, results)
         for text in self._gemini.ask_stream(prompt, history):
             yield "delta", {"text": text}
 

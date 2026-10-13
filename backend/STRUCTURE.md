@@ -24,7 +24,7 @@ backend/
 │   │   ├── vector_store.py        # Bọc ChromaDB: lưu / tìm / đọc toàn bộ chunk
 │   │   ├── bm25.py                # Chỉ mục BM25 trong RAM (tìm theo từ khoá)
 │   │   ├── retriever.py           # Hybrid BM25 + dense, gộp RRF, ngưỡng, gọi rerank
-│   │   ├── reranker.py            # Cross-encoder bge-reranker-v2-m3 (tuỳ chọn)
+│   │   ├── reranker.py            # Cross-encoder bge-reranker-v2-m3 (mặc định bật)
 │   │   └── prompt.py              # Ghép các chunk + câu hỏi thành prompt
 │   ├── scripts/
 │   │   └── ingest.py              # Build vector index từ file dữ liệu
@@ -121,7 +121,7 @@ Frontend hiển thị câu trả lời + danh sách nguồn
 - `get_rag_service()`: singleton — `GeminiService` và `Retriever` (kèm việc dựng chỉ mục BM25) chỉ được tạo ở request đầu tiên rồi tái sử dụng.
 
 ### `app/services/gemini_service.py`
-- `SYSTEM_INSTRUCTION`: prompt hệ thống cố định — không chẩn đoán cá nhân, không kê đơn, khuyến cáo đi khám / gọi 115 khi có dấu hiệu nguy hiểm. Sửa "cách cư xử" của chatbot ở đây; sửa quy tắc bám context ở `rag/prompt.py`.
+- `SYSTEM_INSTRUCTION`: prompt hệ thống cố định — chỉ dùng thông tin trong tài liệu được đưa kèm, không chẩn đoán cá nhân, không kê đơn, khuyến cáo đi khám / gọi 115 khi có dấu hiệu nguy hiểm. Sửa "cách cư xử" của chatbot ở đây; sửa quy tắc bám context ở `rag/prompt.py`.
 - `GeminiService.rewrite_query(message, history)`: gọi Gemini với prompt riêng (`REWRITE_INSTRUCTION`, temperature 0) để viết câu hỏi nối tiếp thành câu độc lập; câu trả lời cũ của bot chỉ lấy 500 ký tự đầu.
 - `GeminiService.ask(message, history)`: chuyển `history` sang format Gemini SDK (`{"role", "parts"}`), mở phiên chat với lịch sử đó và gửi prompt RAG làm tin nhắn mới nhất.
 
@@ -159,7 +159,9 @@ Frontend hiển thị câu trả lời + danh sách nguồn
 
 ### `app/rag/prompt.py`
 - `build_context(results)`: mỗi chunk thành khối `[Nguồn i] tiêu đề | Mục: …` kèm nội dung và URL. `i` đánh theo **bài**, không theo chunk (chunk cùng bài chung số), cùng thứ tự với `sources` trả về frontend — nên "[Nguồn i]" trong câu trả lời khớp với nguồn thứ i hiển thị; không có chunk thì ghi "Không tìm thấy tài liệu phù hợp…".
-- `build_rag_prompt(question, context)`: quy tắc chỉ trả lời dựa trên context, không bịa, không kê đơn, gặp dấu hiệu cấp cứu thì khuyên gọi 115.
+- `build_rag_prompt(question, context)`: quy tắc chỉ trả lời dựa trên context, không bịa, không kê đơn, không nêu liều thuốc (hàm lượng, số lần/ngày, thời gian dùng) kể cả khi context có ghi, gặp dấu hiệu cấp cứu thì khuyên gọi 115.
+- `build_no_context_prompt(question)`: prompt khi retrieve không ra chunk nào — tối đa 3 câu, nói chưa có thông tin (hoặc từ chối câu ngoài lĩnh vực sức khỏe), khuyên đi khám / gọi 115, cấm nêu triệu chứng, con số, thuốc, điều trị, tiên lượng.
+- `build_prompt(question, results)`: chọn một trong hai prompt trên theo `results`; `RagService` gọi hàm này.
 
 ### `app/scripts/ingest.py`
 - Load → chunk → embed theo batch 32 → reset collection và lưu vào Chroma, in tiến độ từng batch.
