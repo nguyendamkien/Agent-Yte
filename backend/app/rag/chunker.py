@@ -40,6 +40,12 @@ def _split_text(text: str, max_chars: int, overlap_chars: int) -> list[str]:
 	return chunks
 
 
+def chunk_prefix(title: str, heading: str) -> str:
+	"""Phần đầu của text chunk. Có tên bài vì heading thường chung chung ("Tóm tắt",
+	"Điều trị") — thiếu tên bệnh thì chunk của các bệnh gần nhau dễ bị lấy nhầm."""
+	return f"{title}\n{heading}\n" if title else f"{heading}\n"
+
+
 def chunk_documents(
 	documents: list[dict[str, Any]],
 	max_chars: int = 2400,
@@ -52,6 +58,7 @@ def chunk_documents(
 		if not sections:
 			sections = [{"heading": "Nội dung", "content": document.get("full_text", "")}]
 
+		title = str(document.get("title") or "").strip()
 		chunk_index = 0
 		for section in sections:
 			heading = str(section.get("heading") or "Nội dung").strip()
@@ -60,12 +67,13 @@ def chunk_documents(
 				chunks.append(
 					{
 						"id": f"{document['id']}-{chunk_index}",
-						"text": f"{heading}\n{text}",
+						"text": chunk_prefix(title, heading) + text,
 						"metadata": {
 							"document_id": str(document["id"]),
 							"source": str(document.get("source") or ""),
-							"title": str(document.get("title") or ""),
+							"title": title,
 							"category": str(document.get("category") or ""),
+							"disease_group": str(document.get("disease_group") or ""),
 							"section": heading,
 							"url": str(document.get("url") or ""),
 							"citation": str(document.get("citation") or ""),

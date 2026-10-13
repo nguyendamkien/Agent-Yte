@@ -41,11 +41,16 @@ Mỗi chunk trả về có:
     scores  điểm từng thành phần để debug: dense, bm25, dense_rank, bm25_rank, rrf, rerank
 
 RETRIEVAL_MODE=dense giữ hành vi cũ: chỉ dense, lọc từng chunk theo RAG_MIN_SCORE.
+
+Lọc theo nhóm bệnh (search(..., disease_group=...)): nhánh dense lọc bằng `where` của Chroma,
+nhánh BM25 chấm điểm toàn bộ rồi bỏ chunk khác nhóm — cả hai nhánh vẫn lấy đủ N ứng viên
+trong nhóm. Danh sách nhóm hợp lệ (Retriever.disease_groups) đọc từ metadata của index.
 Sau khi chạy lại ingest cần khởi động lại server để dựng lại chỉ mục BM25.
 """
 
 from app.config import get_settings
 from app.rag.bm25 import BM25Index
+from app.rag.chunker import chunk_prefix
 from app.rag.embeddings import embed_query
 from app.rag.reranker import get_reranker
 from app.rag.vector_store import ChromaVectorStore
@@ -60,6 +65,19 @@ def reciprocal_rank_fusion(rankings: dict[str, list[str]], k: int) -> dict[str, 
 	return fused
 
 
+# Chunker lặp lại tối đa 300 ký tự cuối của chunk trước ở đầu chunk sau (overlap_chars).
+MAX_OVERLAP_CHARS = 400
+MIN_OVERLAP_CHARS = 20  # ngắn hơn thì coi là trùng ngẫu nhiên, không cắt
+
+
+def _join_overlapping(previous: str, following: str) -> str:
+	"""Nối hai chunk liền nhau của cùng một section, bỏ đoạn overlap bị lặp."""
+	for size in range(min(len(previous), len(following), MAX_OVERLAP_CHARS), MIN_OVERLAP_CHARS - 1, -1):
+		if previous.endswith(following[:size]):
+			return previous + following[size:]
+	return f"{previous} {following}"
+
+
 class Retriever:
 	def __init__(self, store: ChromaVectorStore | None = None, mode: str | None = None, rerank: bool | None = None) -> None:
 		settings = get_settings()
@@ -69,36 +87,94 @@ class Retriever:
 		if self.mode not in ("dense", "hybrid"):
 			raise ValueError(f"RETRIEVAL_MODE không hợp lệ: {self.mode} (chọn 'dense' hoặc 'hybrid')")
 
-		self._chunks: dict[str, dict] = {}
+		# Giữ toàn bộ chunk trong RAM: dựng BM25, lọc theo nhóm bệnh, ghép lại bài (get_article).
+		self._chunks: dict[str, dict] = {chunk["id"]: chunk for chunk in self._store.get_all()}
+		self.disease_groups: list[str] = sorted(
+			{chunk["metadata"].get("disease_group") for chunk in self._chunks.values()} - {None, ""}
+		)
 		self._bm25: BM25Index | None = None
 		if self.mode == "hybrid":
 			# Dựng BM25 từ đúng các chunk đang có trong Chroma (vài trăm ms với vài chục nghìn chunk).
-			for chunk in self._store.get_all():
-				self._chunks[chunk["id"]] = chunk
 			ids = list(self._chunks)
 			self._bm25 = BM25Index(ids, [self._chunks[i]["text"] for i in ids])
 
-	def search(self, query: str, top_k: int | None = None, query_embedding: list[float] | None = None) -> list[dict]:
-		"""`query_embedding` cho phép truyền sẵn vector (script đánh giá embed theo lô)."""
+	def search(
+		self,
+		query: str,
+		top_k: int | None = None,
+		query_embedding: list[float] | None = None,
+		disease_group: str | None = None,
+	) -> list[dict]:
+		"""`query_embedding` cho phép truyền sẵn vector (script đánh giá embed theo lô).
+		`disease_group` chỉ tìm trong một nhóm bệnh — phải là một giá trị của `disease_groups`."""
 		settings = get_settings()
 		top_k = top_k or settings.rag_top_k
+		disease_group = disease_group or None
+		if disease_group and disease_group not in self.disease_groups:
+			raise ValueError(
+				f"Nhóm bệnh không có trong index: {disease_group!r}. Các nhóm hợp lệ: {self.disease_groups}"
+			)
+		where = {"disease_group": disease_group} if disease_group else None
 		embedding = query_embedding or embed_query(query)
 		if self.mode == "dense":
-			results = self._store.search(embedding, top_k)
+			results = self._store.search(embedding, top_k, where)
 			return [result for result in results if result["score"] >= settings.rag_min_score]
-		return self._hybrid_search(query, embedding, top_k)
+		return self._hybrid_search(query, embedding, top_k, disease_group, where)
 
-	def _hybrid_search(self, query: str, embedding: list[float], top_k: int) -> list[dict]:
+	def get_article(self, document_id: str) -> dict | None:
+		"""Ghép lại một bài viết từ các chunk của nó; None nếu index không có bài này.
+
+		Trả về metadata của bài kèm `sections: [{"heading", "content"}]` theo đúng thứ tự trong
+		bài. Phần overlap giữa các chunk của cùng một section được bỏ, tên bài / heading mà
+		chunker gắn vào đầu text chunk cũng được bỏ.
+		"""
+		chunks = [chunk for chunk in self._chunks.values() if chunk["metadata"].get("document_id") == document_id]
+		if not chunks:
+			return None
+		# ID chunk là "{document_id}-{số thứ tự}".
+		chunks.sort(key=lambda chunk: int(chunk["id"].rsplit("-", 1)[1]))
+		sections: list[dict[str, str]] = []
+		for chunk in chunks:
+			metadata = chunk["metadata"]
+			heading = metadata.get("section", "")
+			body = chunk["text"]
+			for prefix in (chunk_prefix(metadata.get("title", ""), heading), f"{heading}\n"):
+				if body.startswith(prefix):
+					body = body[len(prefix):]
+					break
+			if sections and sections[-1]["heading"] == heading:
+				sections[-1]["content"] = _join_overlapping(sections[-1]["content"], body)
+			else:
+				sections.append({"heading": heading, "content": body})
+		metadata = chunks[0]["metadata"]
+		return {
+			"document_id": document_id,
+			**{key: metadata.get(key, "") for key in ("title", "url", "citation", "source", "category", "disease_group")},
+			"sections": sections,
+		}
+
+	def _hybrid_search(
+		self, query: str, embedding: list[float], top_k: int, disease_group: str | None, where: dict | None
+	) -> list[dict]:
 		settings = get_settings()
 		n_candidates = max(settings.rag_candidates, top_k)
 
 		# Nhánh 1 — dense: top-N theo cosine.
-		dense_hits = self._store.search(embedding, n_candidates)
+		dense_hits = self._store.search(embedding, n_candidates, where)
 		if not dense_hits or dense_hits[0]["score"] < settings.rag_min_score:
 			return []  # không có chunk nào đủ gần về ngữ nghĩa → coi như ngoài phạm vi dữ liệu
 
 		# Nhánh 2 — BM25: top-N theo từ khoá.
-		bm25_hits = self._bm25.search(query, n_candidates) if self._bm25 else []
+		bm25_hits = []
+		if self._bm25 and disease_group:
+			# BM25 không có bộ lọc: chấm toàn bộ rồi giữ N chunk đầu thuộc nhóm bệnh.
+			bm25_hits = [
+				(chunk_id, score)
+				for chunk_id, score in self._bm25.search(query, len(self._bm25))
+				if self._chunks[chunk_id]["metadata"].get("disease_group") == disease_group
+			][:n_candidates]
+		elif self._bm25:
+			bm25_hits = self._bm25.search(query, n_candidates)
 
 		# Gộp: RRF trên thứ hạng của hai nhánh.
 		rankings = {

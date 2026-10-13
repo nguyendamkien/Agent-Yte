@@ -130,7 +130,7 @@ Frontend hiển thị câu trả lời + danh sách nguồn
 
 ### `app/rag/chunker.py`
 - `chunk_documents(documents)`: mỗi `section` của bài xử lý riêng; section ≤ 2400 ký tự thành 1 chunk, dài hơn thì tách câu và ghép lại, overlap 300 ký tự.
-- Text chunk là `"{heading}\n{nội dung}"`; metadata gồm `document_id`, `source`, `title`, `category`, `section`, `url`, `citation`.
+- Text chunk là `"{title}\n{heading}\n{nội dung}"` (`chunk_prefix`); metadata gồm `document_id`, `source`, `title`, `category`, `disease_group`, `section`, `url`, `citation`.
 
 ### `app/rag/embeddings.py`
 - `embed_texts(texts)`: gửi cả batch trong một request tới OpenAI, trả vector theo đúng thứ tự đầu vào.
@@ -138,7 +138,7 @@ Frontend hiển thị câu trả lời + danh sách nguồn
 
 ### `app/rag/vector_store.py`
 - `ChromaVectorStore`: `PersistentClient` tại `VECTOR_DB_PATH`, collection dùng khoảng cách cosine.
-- `reset()` xoá và tạo lại collection; `add()` upsert chunk; `search()` trả top-k kèm `id` và `score = 1 − cosine distance`; `get_all()` đọc toàn bộ chunk để dựng BM25.
+- `reset()` xoá và tạo lại collection; `add()` upsert chunk; `search()` trả top-k kèm `id` và `score = 1 − cosine distance`, nhận thêm `where` để lọc theo metadata; `get_all()` đọc toàn bộ chunk để dựng BM25.
 
 ### `app/rag/bm25.py`
 - `tokenize(text)`: âm tiết thường hoá, bỏ hư từ, thêm bigram âm tiết (`huyết_áp`) để giữ từ ghép tiếng Việt.
@@ -150,7 +150,9 @@ Frontend hiển thị câu trả lời + danh sách nguồn
   - `dense`: chỉ tìm theo vector, lọc từng chunk theo `RAG_MIN_SCORE`.
 - Ngưỡng "không có tài liệu phù hợp" áp cho cả câu hỏi (cosine tốt nhất, và điểm rerank tốt nhất khi bật rerank) → trả về rỗng.
 - Mỗi chunk trả về có `score` và `scores` (dense, bm25, thứ hạng từng nhánh, rrf, rerank) để debug.
-- Chỉ mục BM25 dựng khi khởi tạo `Retriever` → **chạy lại ingest thì phải khởi động lại server**.
+- `Retriever.search(query, disease_group=...)`: chỉ tìm trong một nhóm bệnh (một giá trị của `Retriever.disease_groups`, đọc từ metadata của index).
+- `Retriever.get_article(document_id)`: ghép lại cả bài từ các chunk — metadata kèm `sections: [{heading, content}]`, đã bỏ overlap.
+- Toàn bộ chunk và chỉ mục BM25 được nạp khi khởi tạo `Retriever` → **chạy lại ingest thì phải khởi động lại server**.
 
 ### `app/rag/reranker.py`
 - `CrossEncoderReranker.rerank(query, candidates, top_k)`: chấm lại từng cặp (câu hỏi, chunk) rồi giữ top-k.

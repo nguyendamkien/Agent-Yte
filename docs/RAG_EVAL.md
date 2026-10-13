@@ -117,6 +117,32 @@ Nhận xét:
 
 Cả 5 câu được viết lại đúng bệnh ("Vậy điều trị thế nào?" → "Các phương pháp điều trị bệnh gout là gì?"; "Còn nước chanh thì sao?" → "Người suy thận có uống được nước chanh không?"). Chunk đầu tiên luôn đúng bài; `disease_precision` thấp hơn bản viết tay một chút nghĩa là trong top-5 vẫn còn vài chunk bệnh khác ở các hạng dưới. Chi phí: thêm 1 lần gọi Gemini (~1 s) cho mỗi câu hỏi có lịch sử. Đánh giá end-to-end sau thay đổi này: xem lần đo 08/10/2026 ở mục dưới.
 
+### Đưa tên bài vào text chunk
+
+Đo ngày 13/10/2026, sau khi đổi text chunk từ `heading + nội dung` sang `tên bài + heading + nội dung`, thêm `disease_group` vào metadata và ingest lại (505 chunk, không đổi). Cùng bộ nhãn, top-5. Chi tiết từng câu: `backend/eval/results_hybrid_title.json`, `backend/eval/results_rerank10_title.json`.
+
+| Tất cả (n = 70) | hit@1 | hit@3 | hit@5 | MRR | section_hit | disease_precision | Câu trượt top-5 |
+|---|---|---|---|---|---|---|---|
+| Hybrid, trước | 0.84 | 0.95 | 0.95 | 0.90 | 0.97 | 0.88 | 3 |
+| Hybrid, sau | 0.88 | 0.94 | 0.97 | 0.91 | 0.97 | 0.89 | 2 |
+| Hybrid + rerank 10, trước | 0.91 | 0.97 | 0.98 | 0.94 | 1.00 | 0.91 | 1 |
+| **Hybrid + rerank 10, sau (đang dùng)** | 0.91 | 0.95 | 0.95 | 0.93 | 1.00 | 0.91 | 3 |
+
+| Follow-up, hybrid + rerank 10 (n = 5) | hit@1 | hit@5 | disease_precision |
+|---|---|---|---|
+| Nguyên văn, trước → sau | 0.40 → 0.40 | 1.00 → 0.60 | 0.32 → 0.24 |
+| Viết tay độc lập, trước → sau | 1.00 → 1.00 | 1.00 → 1.00 | 0.88 → 0.92 |
+| **Gemini viết lại (đang dùng)**, trước → sau | 1.00 → 1.00 | 1.00 → 1.00 | 0.76 → 0.88 |
+
+Nhận xét:
+
+- **Không rerank thì tốt lên** (hit@1 0.84 → 0.88, bớt 1 câu trượt). **Có rerank thì con số tổng giảm nhẹ, nhưng toàn bộ phần giảm nằm ở 2 câu follow-up nguyên văn** — `follow-01` ("Vậy điều trị thế nào?", hạng 3 → trượt) và `follow-04` ("Còn nước chanh thì sao?", hạng 4 → không còn chunk nào qua ngưỡng rerank). So từng câu, 68 câu còn lại giữ nguyên thứ hạng của chunk đúng đầu tiên.
+- Hai câu đó không có tên bệnh; khi chunk mang tên bài thì câu hỏi trống tên bệnh khớp kém hơn. Hệ thống đang chạy không retrieve bằng câu nguyên văn mà bằng câu Gemini viết lại, và ở đường đó kết quả vẫn 1.00, `disease_precision` tăng 0.76 → 0.88. Hệ quả thực tế chỉ xảy ra khi bước viết lại thất bại và server dùng lại câu gốc: trước đây thường lấy nhầm bài của bệnh khác, nay dễ rơi vào "chưa có thông tin" hơn.
+- **Ngưỡng `RERANK_MIN_SCORE = 0.4` vẫn đúng, tách còn rộng hơn:** câu có đáp án đúng ở hạng 1 có điểm rerank thấp nhất 0.72 (trước 0.73), câu ngoài phạm vi cao nhất 0.08 (trước 0.17). 5/5 câu ngoài phạm vi vẫn bị chặn ở retrieval; câu có đáp án duy nhất bị chặn là `follow-04` nguyên văn.
+- Cosine top-1 thấp nhất của câu có đáp án giảm 0.48 → 0.36, vẫn trên `RAG_MIN_SCORE = 0.25`.
+- Chưa chạy lại đánh giá end-to-end (`eval_rag.py`) trên index mới; các bảng RAGAS bên dưới đo trên index cũ.
+- Lần đo này mất ~30 phút thay vì ~14 phút vì máy đang chạy thêm tiến trình khác; không phải do đổi chunk.
+
 Sau mỗi thay đổi về chunking, embedding, retrieval, top-k hay ngưỡng điểm, chạy lại script và so với bảng này.
 
 ## Đánh giá end-to-end theo 4 tiêu chí RAGAS — `eval_rag.py`

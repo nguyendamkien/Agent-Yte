@@ -87,10 +87,10 @@ Chia theo section, rồi cắt tiếp theo câu:
 1. Mỗi `section` của bài được xử lý riêng, nên nội dung "Triệu chứng" và "Điều trị" không bị trộn vào một chunk. Bài không có `sections` thì dùng `full_text` với heading "Nội dung".
 2. Section **≤ 2400 ký tự** → giữ nguyên thành 1 chunk.
 3. Section dài hơn → tách câu theo `. ! ? ; :`, ghép dần tới gần 2400 ký tự thì đóng chunk. Chunk sau lấy **300 ký tự cuối** của chunk trước làm overlap. Không tách được câu thì cắt theo khoảng trắng.
-4. Text của chunk: `"{heading}\n{nội dung}"`. ID chunk: `{document_id}-{số thứ tự}`.
-5. Metadata đi kèm: `document_id`, `source`, `title`, `category`, `section`, `url`, `citation`.
+4. Text của chunk: `"{title}\n{heading}\n{nội dung}"` (`chunk_prefix`). Tên bài nằm trong text vì heading thường chung chung ("Tóm tắt", "Điều trị"): thiếu tên bệnh thì chunk của các bệnh gần nhau dễ bị lấy nhầm. Giới hạn 2400 ký tự chỉ tính phần nội dung. ID chunk: `{document_id}-{số thứ tự}`.
+5. Metadata đi kèm: `document_id`, `source`, `title`, `category`, `disease_group`, `section`, `url`, `citation`.
 
-Với file 10 bệnh, mỗi chunk trung bình ~590 token; chunk lớn nhất ~1.300 token, dưới giới hạn 8.191 token của OpenAI.
+Với file 10 bệnh, mỗi chunk trung bình ~625 token; chunk lớn nhất ~1.340 token, dưới giới hạn 8.191 token của OpenAI.
 
 ### 3. Embed — `app/rag/embeddings.py`
 
@@ -154,6 +154,13 @@ rrf(chunk) = Σ  1 / (RRF_K + hạng của chunk trong nhánh đó)      RRF_K =
 
 Kết quả sau khi gộp được sắp theo điểm RRF và lấy `RAG_TOP_K` = 5 chunk (hoặc chuyển sang rerank nếu bật).
 
+### Lọc theo nhóm bệnh và đọc cả bài
+
+Hai khả năng của `Retriever` chưa được pipeline chat dùng tới; chúng là nền cho các tool của agent ([AGENTIC_RAG.md](AGENTIC_RAG.md)):
+
+- `Retriever.search(query, disease_group="Suy thận")` chỉ tìm trong một nhóm bệnh. Nhánh dense lọc bằng `where` của Chroma; nhánh BM25 chấm điểm toàn bộ rồi bỏ chunk khác nhóm, nên cả hai nhánh vẫn lấy đủ `RAG_CANDIDATES` ứng viên trong nhóm. Giá trị phải thuộc `Retriever.disease_groups` (đọc từ metadata của index lúc khởi động, không viết cứng); giá trị khác → `ValueError`.
+- `Retriever.get_article(document_id)` ghép lại một bài từ các chunk của nó: metadata của bài kèm `sections: [{heading, content}]` theo đúng thứ tự, đã bỏ phần overlap giữa các chunk và tên bài / heading gắn ở đầu chunk. Không cần embedding hay rerank. Đã đối chiếu với file dữ liệu: 100/100 bài ghép lại khớp nguyên văn (sau khi gộp khoảng trắng).
+
 ### Ngưỡng "không có tài liệu phù hợp"
 
 Áp cho **cả câu hỏi**, không cho từng chunk (chunk chỉ đến từ BM25 không có điểm cosine). Trả về rỗng → dùng prompt "không có tài liệu" (`build_no_context_prompt`).
@@ -206,6 +213,8 @@ Thêm về hybrid + rerank: section_hit 0.97 → 1.00, disease_precision 0.88 �
 
 Hybrid cứu được các câu dense bỏ lỡ vì thuật ngữ hiếm (`gout-08` — "nốt tophi") hoặc cần nhiều bài (`multi-03` — viêm da cơ địa và hen suyễn). Các câu còn trượt chủ yếu là **câu hỏi nối tiếp** ("Vậy điều trị thế nào?") — retrieval chỉ nhìn câu hỏi hiện tại, cần viết lại câu hỏi dựa trên lịch sử chat mới sửa được.
 
+**Sau khi đưa tên bài vào text chunk (13/10/2026):** hybrid không rerank tăng hit@1 0.84 → 0.88; hybrid + rerank 10 ứng viên đạt hit@1 0.91, hit@3 0.95, hit@5 0.95, MRR 0.93. Phần giảm so với bảng trên nằm trọn ở 2 câu follow-up retrieve bằng câu nguyên văn (không có tên bệnh); với câu đã viết lại — đường hệ thống thực sự chạy — kết quả vẫn 1.00. Điểm rerank tách câu có đáp án (≥ 0.72) và câu ngoài phạm vi (≤ 0.08) rõ hơn trước. Chi tiết: [RAG_EVAL.md](RAG_EVAL.md).
+
 `RETRIEVAL_MODE=dense` quay về cách cũ (chỉ dense, lọc từng chunk theo `RAG_MIN_SCORE`).
 
 ## Cấu hình liên quan (`backend/.env`)
@@ -235,12 +244,10 @@ Xem [RAG_EVAL.md](RAG_EVAL.md): bộ golden test 70 câu, script đo retrieval (
 
 ## Hạn chế đã biết
 
-- **Text chunk không chứa tên bệnh.** `title` chỉ nằm trong metadata, không nằm trong text được embed; 77/428 section dùng heading chung "Tóm tắt". Hệ quả: các chunk cùng loại của các bệnh gần nhau có thể bị lấy nhầm (ví dụ Viêm gan A khi hỏi Viêm gan B). Hướng sửa: đưa `title` vào text chunk.
 - **Khi tắt rerank, `RAG_MIN_SCORE = 0.25` gần như không lọc được gì**: cosine của câu ngoài phạm vi (tới 0.52) chồng lên câu có đáp án (từ 0.48), việc từ chối dựa vào prompt. Bật rerank thì `RERANK_MIN_SCORE` giải quyết được, nhưng rerank chậm trên CPU.
 - **Câu hỏi nối tiếp** phụ thuộc vào bước viết lại câu hỏi: tắt `QUERY_REWRITE_ENABLED` thì retrieval chỉ dùng câu hỏi hiện tại và lấy sai tài liệu. Bật thì mỗi câu hỏi nối tiếp tốn thêm 1 lần gọi Gemini.
 - **Lịch sử chỉ lưu ở trình duyệt** và bị cắt còn `HISTORY_MAX_TURNS` lượt — chatbot không nhớ thông tin từ các lượt cũ hơn hay từ cuộc trò chuyện khác.
 - **Đường dẫn tương đối** (`DATA_PATH`, `VECTOR_DB_PATH`) chỉ đúng khi chạy lệnh từ thư mục `backend/`.
 - **`reset()` chạy trước khi embed**: nếu ingest lỗi giữa chừng, index sẽ trống hoặc thiếu cho tới khi chạy lại thành công.
 - Bước chunk gộp mọi khoảng trắng/xuống dòng trước khi cắt, nên cấu trúc đoạn văn và danh sách không được giữ.
-- `disease_group` chưa được đưa vào metadata.
 - **Rerank chậm trên CPU**: với cấu hình đang dùng (10 ứng viên) mỗi câu hỏi mất thêm ~11–12 s, đổi lại chất lượng retrieval tốt hơn rõ (với 20 ứng viên: hit@1 0.84 → 0.91).

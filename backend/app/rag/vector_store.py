@@ -50,10 +50,14 @@ class ChromaVectorStore:
 			for chunk_id, text, metadata in zip(result["ids"], result["documents"], result["metadatas"])
 		]
 
-	def search(self, query_embedding: list[float], top_k: int) -> list[dict[str, Any]]:
+	def search(
+		self, query_embedding: list[float], top_k: int, where: dict[str, Any] | None = None
+	) -> list[dict[str, Any]]:
+		"""`where` lọc theo metadata (cú pháp Chroma), vd {"disease_group": "Suy thận"}."""
 		result = self._collection.query(
 			query_embeddings=[query_embedding],
 			n_results=top_k,
+			where=where,
 			include=["documents", "metadatas", "distances"],
 		)
 		ids = result.get("ids", [[]])[0]
